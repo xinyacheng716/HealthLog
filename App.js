@@ -10,6 +10,7 @@ import { StatusBar } from 'expo-status-bar';
 
 import RecordScreen from './src/screens/RecordScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
+import CalendarScreen from './src/screens/CalendarScreen';
 import DailyMedScreen from './src/screens/DailyMedScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import LoginScreen from './src/screens/LoginScreen';
@@ -36,8 +37,9 @@ const FONT = { fontFamily: KAITI };
 const TABS = [
   { name: '記錄症狀', char: '記', idx: 0 },
   { name: '歷史紀錄', char: '史', idx: 1 },
-  { name: '每日用藥', char: '藥', idx: 2 },
-  { name: '設定',    char: '調', idx: 3 },
+  { name: '行事曆',   char: '曆', idx: 2 },
+  { name: '每日用藥', char: '藥', idx: 3 },
+  { name: '設定',    char: '調', idx: 4 },
 ];
 
 // Tab icon: a calligraphic Chinese character in a small seal-square
@@ -195,7 +197,7 @@ function AppContent() {
             key={tab.name}
             name={tab.name}
             component={makeScreen(
-              [RecordScreen, HistoryScreen, DailyMedScreen, SettingsScreen][tab.idx],
+              [RecordScreen, HistoryScreen, CalendarScreen, DailyMedScreen, SettingsScreen][tab.idx],
               tab.idx,
             )}
           />
