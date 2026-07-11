@@ -1,6 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { supabase } from './supabase';
-import { enqueuePendingSync } from './syncQueue';
 
 // "2026/06/21 21:03" → "2026-06-21T21:03:00"
 function toISO(s) {
@@ -38,17 +37,7 @@ export async function pushSymptomLogToCloud(log) {
     const { error } = await supabase.from('symptom_logs').upsert(payload);
     if (error) throw new Error(error.message);
   } catch (e) {
-    console.warn('[cloudSync] pushSymptomLogToCloud failed, enqueueing for retry:', e.message);
-    // payload 只有在拿到 session 之後才會建立；沒有 session 就不算是「失敗」，不需要排隊。
-    if (payload) {
-      await enqueuePendingSync({
-        id: log.id,
-        table: 'symptom_logs',
-        operation: 'upsert',
-        payload,
-        createdAt: Date.now(),
-      });
-    }
+    console.warn('[cloudSync] pushSymptomLogToCloud failed:', e.message);
   }
 }
 
@@ -68,16 +57,7 @@ export async function pushMedicalHistoryToCloud(record, year) {
     const { error } = await supabase.from('medical_history').upsert(payload);
     if (error) throw new Error(error.message);
   } catch (e) {
-    console.warn('[cloudSync] pushMedicalHistoryToCloud failed, enqueueing for retry:', e.message);
-    if (payload) {
-      await enqueuePendingSync({
-        id: record.id,
-        table: 'medical_history',
-        operation: 'upsert',
-        payload,
-        createdAt: Date.now(),
-      });
-    }
+    console.warn('[cloudSync] pushMedicalHistoryToCloud failed:', e.message);
   }
 }
 
@@ -95,18 +75,7 @@ export async function deleteMedicalHistoryFromCloud(id) {
     if (error) throw new Error(error.message);
     console.log('[cloudSync] medical_history record deleted:', id);
   } catch (e) {
-    console.warn('[cloudSync] deleteMedicalHistoryFromCloud failed, enqueueing for retry:', e.message);
-    // 同一個 id 之前如果被 pushMedicalHistoryToCloud 排過 upsert，
-    // 這裡用同一個 table:id 去重鍵蓋掉，佇列裡不會同時留著互相矛盾的兩筆。
-    if (ownerId) {
-      await enqueuePendingSync({
-        id,
-        table: 'medical_history',
-        operation: 'delete',
-        payload: { id, owner_id: ownerId },
-        createdAt: Date.now(),
-      });
-    }
+    console.warn('[cloudSync] deleteMedicalHistoryFromCloud failed:', e.message);
   }
 }
 
@@ -124,19 +93,7 @@ export async function deleteMedHistoryYearFromCloud(year) {
     if (error) throw new Error(error.message);
     console.log('[cloudSync] medical_history year deleted:', year);
   } catch (e) {
-    console.warn('[cloudSync] deleteMedHistoryYearFromCloud failed, enqueueing for retry:', e.message);
-    if (ownerId) {
-      // 整年刪除沒有單一 row id，用 owner_id:year 當去重鍵；
-      // operation 標記為 'delete_year'，flushOne 用批次 .eq('owner_id',...).eq('year',...) 處理，
-      // 不是單筆 .eq('id', ...)。
-      await enqueuePendingSync({
-        id: `${ownerId}:${year}`,
-        table: 'medical_history',
-        operation: 'delete_year',
-        payload: { owner_id: ownerId, year },
-        createdAt: Date.now(),
-      });
-    }
+    console.warn('[cloudSync] deleteMedHistoryYearFromCloud failed:', e.message);
   }
 }
 
@@ -154,16 +111,7 @@ export async function deleteSymptomLogFromCloud(id) {
     if (error) throw new Error(error.message);
     console.log('[cloudSync] symptom_log deleted from cloud:', id);
   } catch (e) {
-    console.warn('[cloudSync] deleteSymptomLogFromCloud failed, enqueueing for retry:', e.message);
-    if (ownerId) {
-      await enqueuePendingSync({
-        id,
-        table: 'symptom_logs',
-        operation: 'delete',
-        payload: { id, owner_id: ownerId },
-        createdAt: Date.now(),
-      });
-    }
+    console.warn('[cloudSync] deleteSymptomLogFromCloud failed:', e.message);
   }
 }
 
@@ -181,16 +129,7 @@ export async function deleteAppointmentFromCloud(id) {
     if (error) throw new Error(error.message);
     console.log('[cloudSync] appointment deleted from cloud:', id);
   } catch (e) {
-    console.warn('[cloudSync] deleteAppointmentFromCloud failed, enqueueing for retry:', e.message);
-    if (ownerId) {
-      await enqueuePendingSync({
-        id,
-        table: 'appointments',
-        operation: 'delete',
-        payload: { id, owner_id: ownerId },
-        createdAt: Date.now(),
-      });
-    }
+    console.warn('[cloudSync] deleteAppointmentFromCloud failed:', e.message);
   }
 }
 
@@ -215,16 +154,7 @@ export async function pushAppointmentToCloud(appt) {
     const { error } = await supabase.from('appointments').upsert(payload);
     if (error) throw new Error(error.message);
   } catch (e) {
-    console.warn('[cloudSync] pushAppointmentToCloud failed, enqueueing for retry:', e.message);
-    if (payload) {
-      await enqueuePendingSync({
-        id: appt.id,
-        table: 'appointments',
-        operation: 'upsert',
-        payload,
-        createdAt: Date.now(),
-      });
-    }
+    console.warn('[cloudSync] pushAppointmentToCloud failed:', e.message);
   }
 }
 
@@ -254,23 +184,7 @@ export async function pushConsultMemoToCloud(date, content) {
       if (error) throw new Error(error.message);
     }
   } catch (e) {
-    console.warn('[cloudSync] pushConsultMemoToCloud failed, enqueueing for retry:', e.message);
-    // 沒有 date 一定沒有 ownerId（連 session 都沒拿到），不算失敗、不用排隊。
-    if (ownerId) {
-      // 用 owner_id:date 當去重鍵——同一天先寫了備忘、離線失敗排進佇列，
-      // 之後又清空該天備忘（也失敗），會用「刪除」蓋掉佇列裡先前的「新增／更新」，
-      // 不會兩筆都留著造成之後補推順序錯亂。
-      await enqueuePendingSync({
-        id: `${ownerId}:${date}`,
-        table: 'consult_memos',
-        operation: content ? 'upsert' : 'delete',
-        payload: content
-          ? { owner_id: ownerId, memo_date: date, content }
-          : { owner_id: ownerId, memo_date: date },
-        onConflict: content ? 'owner_id,memo_date' : undefined,
-        createdAt: Date.now(),
-      });
-    }
+    console.warn('[cloudSync] pushConsultMemoToCloud failed:', e.message);
   }
 }
 
@@ -285,19 +199,7 @@ export async function pushDailyMedCheckToCloud(check) {
       .upsert(payload, { onConflict: 'owner_id,check_date' });
     if (error) throw new Error(error.message);
   } catch (e) {
-    console.warn('[cloudSync] pushDailyMedCheckToCloud failed, enqueueing for retry:', e.message);
-    if (payload) {
-      // daily_med_checks 沒有單一 id 欄位，用 owner_id:check_date 當去重鍵——
-      // 同一天多次打勾失敗，佇列裡只保留最新一次的 checked 內容。
-      await enqueuePendingSync({
-        id: `${payload.owner_id}:${payload.check_date}`,
-        table: 'daily_med_checks',
-        operation: 'upsert',
-        payload,
-        onConflict: 'owner_id,check_date',
-        createdAt: Date.now(),
-      });
-    }
+    console.warn('[cloudSync] pushDailyMedCheckToCloud failed:', e.message);
   }
 }
 

@@ -7,7 +7,7 @@ import {
   fetchOwnerConsultMemosSince,
 } from './viewerData';
 
-const LOCAL_DATA_INIT_FLAG = 'localDataInitialized_v5';
+const LOCAL_DATA_INIT_FLAG = 'localDataInitialized_v4';
 const RECENT_DAYS = 90;
 
 function daysAgoDateString(n) {

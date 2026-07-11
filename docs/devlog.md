@@ -371,3 +371,31 @@ iPad 症狀紀錄正常，藥物清單仍顯示 12 種，根本原因尚未找�
 
 **解法**：`loadSettings()` 新增 `hasLocalData: true/false`，`useSettings` 的 `syncSettingsToCloud` 加上 `if (s.hasLocalData)` guard，fallback 預設值永遠不推雲端；手動 SQL 還原爸爸的正確資料
 **教訓**：App 啟動時有多條非同步流程並行，不能假設執行順序。任何「讀本機 → 推雲端」的操作，都需要先確認本機資料是真實的使用者資料，不是程式碼寫死的預設值。靜默的 fire-and-forget 推送在 race condition 下會造成難以追蹤的資料損毀
+
+---
+
+### C-009｜Build 24 白屏無法單點修復，整批退回 Build 23 行為
+**發現時間**：Build 24 之後
+**症狀**：部分裝置更新到 Build 24 後開啟 App 卡在純色畫面（白屏／深墨色屏），永遠進不了主畫面
+**根本原因（第一輪誤判）**：一開始認為問題出在 `App.js` 的 `AppContent()` 多加的第三層閘道 `if (!isSettingsHydrated)`——只要 `useSettings.js` 裡「向 Supabase 拉 settings → 存 AsyncStorage → setState」這條非同步序列卡住、且 4 秒 timeout 也沒能觸發 fallback，`isSettingsHydrated` 就永遠停在 `false`，畫面因此永久卡住。
+**第一次嘗試的解法（失敗）**：只移除「用 `isSettingsHydrated` 阻擋主畫面渲染」這個閘道本身，其餘 hydration 邏輯（`hasHydratedFromCloudRef`、cloud-first fetch、`syncQueue.js` 重試佇列等）維持不動。結果驗證後發現兩個問題：
+1. **白屏依然發生**——代表真正的根本原因在更早的地方（很可能是 `AuthContext.js` 冷啟動時 `supabase.auth.getSession().then()` 與 `onAuthStateChange` 幾乎同時觸發、或某個 await 本身掛住），不是這層渲染閘道造成的，移除它治標不治本。
+2. **引入新的資料遺失風險**——畫面提早出現後，使用者能在 `hasHydratedFromCloudRef.current` 還是 `false` 的視窗內操作（例如刪除清單項目），但這段期間 setter 會刻意跳過同步雲端；等雲端資料稍後回來，又把使用者剛剛做的本機變更蓋掉，導致「刪除後又復活」的問題重新出現。
+**最終決定**：不再嘗試修補 hybrid 狀態，而是把 Build 24 新增的東西整批移除，回到乾淨的 Build 23 行為：
+- `useSettings.js`：移除 `isSettingsHydrated`、`hasHydratedFromCloudRef` 與 cloud-first hydration `useEffect`；改回「本機沒資料（`hasLocalData === false`）才拉雲端當初始值」，六個清單的 setter 不再檢查任何 hydrated flag，本機一改就直接 fire-and-forget 推雲端
+- 刪除 `src/lib/syncQueue.js`，`cloudSync.js` 移除所有 `enqueuePendingSync`/`flushPendingSyncQueue` 呼叫，失敗改回單純 `console.warn`
+- 刪除 `CalendarScreen.js`，「月曆行程」「所有行程」搬回 `DailyMedScreen.js` 當子分頁，移除 `App.js` 裡獨立的「行事曆」Tab
+- `initSync.js` 的 `LOCAL_DATA_INIT_FLAG` 改回 `localDataInitialized_v4`
+**教訓**：白屏這類「完全進不去 App」的問題，在根本原因還沒確認前，不要只移除表面症狀的那一層防護——移除閘道前必須先驗證閘道本身就是唯一成因，否則很容易在原本問題沒解決的情況下，還把閘道原本附帶的保護（例如同步時機的安全 guard）一併拆掉，反而多造成一個資料遺失的新問題。C-005／C-006／C-008 和行事曆 UI 之後會另外、獨立地重新設計與測試，這次不在退回範圍內一併處理。
+
+---
+
+### C-010｜爸媽裝置白屏問題最終解決，但解法是 binary patch，不是原始碼修復
+**發現時間**：C-009 退回之後
+**症狀**：爸媽的裝置持續白屏，即使已經照 C-009 把 `src/` 底下完整退回乾淨的 Build 23 邏輯，直接用這份原始碼透過 `eas build` 建置測試，實際上**仍然是白屏**。
+**最終解法**：不是原始碼修復。做法是在 `~/Desktop/build23-restore` 資料夾裡，手動把 Build 23 ipa（已驗證在爸媽裝置上正常運作）解開後的 `main.jsbundle` 與 `assets` 資料夾，直接置換進一個全新簽署的殼子（原本是 Build 27 build 出來的殼子）裡，取代殼子原本的 `main.jsbundle`／`assets`，再用 `codesign` 手動重新簽章，之後上傳 TestFlight。整個修復過程完全發生在原始碼與一般 build 流程之外，沒有經過 `src/` 的任何一行程式碼，也沒有經過 EAS 的正常 build pipeline。
+**⚠️ 重要警示**：目前 `src/` 底下的原始碼狀態，是 C-009「完整退回 Build 23 邏輯」那次的重建版本（重新用現有原始碼手動重寫 `useSettings.js`／`cloudSync.js`／`App.js` 等，模擬 Build 23 的行為），**不是**直接從 Build 23 ipa 反解出來的原始碼，兩者不保證等價。這份重建版本本身**尚未被驗證能重現這次的修復結果**——目前手上唯一被證實「爸媽裝置不會白屏」的產物，是那個被 binary patch 過的 ipa，不是這份原始碼建置出來的 build。換句話說，`src/` 目前的狀態只是「看起來邏輯上應該等於 Build 23」，不是「已驗證等於能修好白屏的版本」。
+**待辦**：
+- 真正的白屏根本原因仍然未知。懷疑與 `AuthContext.js` 冷啟動時 `supabase.auth.getSession().then()` 與 `onAuthStateChange` 幾乎同時觸發、可能導致 `initializeAndMigrate()` 被重複呼叫有關，但**未證實**，需要實機重現 log 才能定位。
+- 下次要重新挑戰 C-005／C-006／C-008 或行事曆功能之前，必須先解決「原始碼與實際運作版本不一致」這個落差——具體來說：需要先想辦法用目前 `src/` 這份原始碼透過正常 `eas build` 流程建置一次，實機驗證是否還會白屏。在這件事確認之前，不能假設 `src/` 目前的狀態是可信的基準點，也不能直接在這份原始碼上疊加新功能。
+**教訓**：當「binary patch／手動置換」被拿來當作救急手段解決緊急問題時，一定要在文件裡明確記錄「這個修復繞過了原始碼」，否則之後任何人（包含自己）看到 App 已經正常運作，很容易誤以為目前的原始碼就是那個正常運作版本的真實來源，進而在一個未經驗證的基準點上繼續開發。

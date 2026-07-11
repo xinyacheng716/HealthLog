@@ -1,4 +1,4 @@
-import React, { useEffect, useContext } from 'react';
+import React, { useEffect } from 'react';
 import { View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { requestNotificationPermission, ensureAnticoagulantReminder, ensureAnticoagulantEveningReminder } from './src/lib/notifications';
@@ -10,11 +10,10 @@ import { StatusBar } from 'expo-status-bar';
 
 import RecordScreen from './src/screens/RecordScreen';
 import HistoryScreen from './src/screens/HistoryScreen';
-import CalendarScreen from './src/screens/CalendarScreen';
 import DailyMedScreen from './src/screens/DailyMedScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import LoginScreen from './src/screens/LoginScreen';
-import { AppProviders, SettingsContext } from './src/context';
+import { AppProviders } from './src/context';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { ViewerProvider, useViewer } from './src/context/ViewerContext';
 import { colors, headerShadow } from './src/constants/colors';
@@ -37,9 +36,8 @@ const FONT = { fontFamily: KAITI };
 const TABS = [
   { name: '記錄症狀', char: '記', idx: 0 },
   { name: '歷史紀錄', char: '史', idx: 1 },
-  { name: '行事曆',   char: '曆', idx: 2 },
-  { name: '每日用藥', char: '藥', idx: 3 },
-  { name: '設定',    char: '調', idx: 4 },
+  { name: '每日用藥', char: '藥', idx: 2 },
+  { name: '設定',    char: '調', idx: 3 },
 ];
 
 // Tab icon: a calligraphic Chinese character in a small seal-square
@@ -155,7 +153,6 @@ function makeScreen(Screen, tabIdx) {
 
 function AppContent() {
   const { session, isLoading } = useAuth();
-  const { isSettingsHydrated } = useContext(SettingsContext);
 
   // 登入後請求通知授權，並確保抗凝血每日提醒（早晚各一筆）已排程
   useEffect(() => {
@@ -168,28 +165,12 @@ function AppContent() {
     });
   }, [session?.user?.id]);
 
-  // 預留位置：之後如果實作「App 回到前景」偵測（react-native 的
-  // AppState.addEventListener('change', ...)，狀態變成 'active' 時），
-  // 應該在那個 callback 裡也呼叫一次 flushPendingSyncQueue()
-  // （src/lib/syncQueue.js），補推任何離線期間失敗、還留在佇列裡的
-  // 症狀紀錄／行程／病歷／每日用藥／問診備忘。目前只在 useSettings.js
-  // 的雲端 hydration 成功之後（app 啟動時）呼叫一次，這次先不實作
-  // 前景偵測本身。
-
   if (isLoading) {
     return <View style={{ flex: 1, backgroundColor: colors.header }} />;
   }
 
   if (!session) {
     return <LoginScreen />;
-  }
-
-  // 登入完成後，還要等 settings 從雲端拉回來、寫進本機、setState 完成
-  // （見 useSettings.js 的嚴格序列），才能切換到主畫面，避免顯示還沒被
-  // 雲端資料覆蓋過的本機/預設值。
-  if (!isSettingsHydrated) {
-    console.log('[settings-hydration] waiting for hydration before showing main screen');
-    return <View style={{ flex: 1, backgroundColor: colors.header }} />;
   }
 
   return (
@@ -214,7 +195,7 @@ function AppContent() {
             key={tab.name}
             name={tab.name}
             component={makeScreen(
-              [RecordScreen, HistoryScreen, CalendarScreen, DailyMedScreen, SettingsScreen][tab.idx],
+              [RecordScreen, HistoryScreen, DailyMedScreen, SettingsScreen][tab.idx],
               tab.idx,
             )}
           />
