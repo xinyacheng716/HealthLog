@@ -119,7 +119,7 @@ export default function CalendarScreen() {
 
   // ── 2-tab mode bar ────────────────────────────────────────────────────────
   const TABS_DEF = [
-    { key: 'calendar', label: '月曆行程' },
+    { key: 'calendar', label: '新增行程' },
     { key: 'schedule', label: '所有行程' },
   ];
 
@@ -497,7 +497,7 @@ const styles = StyleSheet.create({
     transform: [{ rotate: '45deg' }],
     marginLeft: 3,
   },
-  backText: { fontSize: 13, color: colors.cinnabar, letterSpacing: 1 },
+  backText: { fontSize: 13, color: colors.cinnabar, letterSpacing: 1, fontWeight: '700' },
   detailDate: {
     flex: 1, fontSize: 15,
     color: colors.textPrimary, letterSpacing: 1,

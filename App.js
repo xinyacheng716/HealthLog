@@ -39,14 +39,15 @@ const TABS = [
   { name: '歷史紀錄', char: '史', idx: 1 },
   { name: '行事曆',   char: '曆', idx: 2 },
   { name: '每日用藥', char: '藥', idx: 3 },
-  { name: '設定',    char: '調', idx: 4 },
+  { name: '設定',    char: '設', idx: 4 },
 ];
 
-// Tab icon: a calligraphic Chinese character in a small seal-square
+// Tab icon: a calligraphic Chinese character in a small seal-square,
+// always shown in the bright gold look; the focused tab is emphasized further
 function TabIcon({ char, focused }) {
   return (
-    <View style={[styles.tabIcon, focused && styles.tabIconActive]}>
-      <Text style={[styles.tabIconChar, FONT, focused && styles.tabIconCharActive]}>
+    <View style={[styles.tabIcon, focused && styles.tabIconFocused]}>
+      <Text style={[styles.tabIconChar, FONT, focused && styles.tabIconCharFocused]}>
         {char}
       </Text>
     </View>
@@ -184,7 +185,7 @@ function AppContent() {
             headerShown: false,
             tabBarStyle: styles.tabBar,
             tabBarActiveTintColor: colors.goldLight,
-            tabBarInactiveTintColor: '#6a5840',
+            tabBarInactiveTintColor: colors.goldLight,
             tabBarLabelStyle: [styles.tabLabel, FONT],
             tabBarIcon: ({ focused }) => (
               <TabIcon char={tab?.char || '?'} focused={focused} />
@@ -357,9 +358,9 @@ const styles = StyleSheet.create({
   tabBar: {
     backgroundColor: colors.headerDeep,
     borderTopWidth: 0,
-    height: 68,
-    paddingBottom: 10,
-    paddingTop: 6,
+    height: 84,
+    paddingBottom: 12,
+    paddingTop: 8,
     shadowColor: colors.gold,
     shadowOffset: { width: 0, height: -1 },
     shadowOpacity: 0.25,
@@ -367,32 +368,35 @@ const styles = StyleSheet.create({
     elevation: 12,
   },
   tabLabel: {
-    fontSize: 10,
+    fontSize: 12,
     letterSpacing: 1.5,
-    marginTop: 2,
+    marginTop: 10,
+    fontWeight: '600',
   },
 
   // ── Tab Icon ─────────────────────────────────────────────────────────────
   tabIcon: {
-    width: 28,
-    height: 28,
-    borderRadius: 5,
+    width: 40,
+    height: 40,
+    borderRadius: 7,
     borderWidth: 1,
-    borderColor: 'rgba(154,120,56,0.25)',
+    borderColor: 'rgba(196,160,88,0.5)',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'transparent',
+    backgroundColor: 'rgba(196,160,88,0.16)',
+    marginBottom: 2,
   },
-  tabIconActive: {
-    borderColor: 'rgba(196,160,88,0.7)',
-    backgroundColor: 'rgba(139,48,32,0.35)',
+  tabIconFocused: {
+    borderWidth: 1.5,
+    borderColor: colors.goldLight,
+    backgroundColor: 'rgba(196,160,88,0.35)',
   },
   tabIconChar: {
-    fontSize: 14,
-    color: '#6a5840',
-    lineHeight: 18,
-  },
-  tabIconCharActive: {
+    fontSize: 20,
     color: colors.goldLight,
+    lineHeight: 25,
+  },
+  tabIconCharFocused: {
+    fontWeight: '700',
   },
 });
