@@ -1,14 +1,15 @@
-import React, { useContext, useState, useEffect, useCallback } from 'react';
+import React, { useContext, useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, KeyboardAvoidingView, Modal,
-  Dimensions,
+  Dimensions, AppState,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, cardShadow } from '../constants/colors';
 import { SettingsContext } from '../context';
-import { loadDailyMed, saveDailyMed, loadMarkedDates } from '../storage';
+import { loadDailyMed, saveDailyMed, saveDailyMedLocalOnly, loadMarkedDates } from '../storage';
 import { useViewer } from '../context/ViewerContext';
+import { useAuth } from '../context/AuthContext';
 import { fetchOwnerDailyMed, fetchOwnerMedList, fetchOwnerAllMedKeys } from '../lib/viewerData';
 import {
   ensureAnticoagulantReminder,
@@ -30,6 +31,7 @@ function todayKey() {
 export default function DailyMedScreen() {
   const { medList } = useContext(SettingsContext);
   const { isViewerMode, activeOwner } = useViewer();
+  const { session } = useAuth();
   const insets = useSafeAreaInsets();
   const today = todayKey();
   const activeDate = today;
@@ -55,6 +57,60 @@ export default function DailyMedScreen() {
     loadDailyMed(activeDate).then((data) => setChecked(data.checked || {}));
   }, [activeDate]);
 
+  // activeDate 目前恆等於 today（這個畫面沒有日期切換 UI，月曆瀏覽在
+  // CalendarScreen.js），但 refreshDailyMedFromCloud 是非同步的，呼叫當下
+  // 的 activeDate 跟拉取完成當下的「現在」可能因跨午夜而不同。用 ref 保存
+  // 「畫面目前實際顯示的日期」，讓非同步回呼能拿到解析當下的最新值，而不是
+  // 呼叫當下那次 render 關閉住的舊值。
+  const activeDateRef = useRef(activeDate);
+  useEffect(() => {
+    activeDateRef.current = activeDate;
+  }, [activeDate]);
+
+  // Owner 模式：重新從雲端拉取指定日期的用藥勾選狀態，直接更新畫面 state
+  // （不是只寫本機、等下次掛載被動撿到）。AppState 前景轉換、畫面 focus
+  // 兩個觸發來源共用這支函式。
+  async function refreshDailyMedFromCloud(dateAtCallTime) {
+    const ownerId = session?.user?.id;
+    if (!ownerId) return;
+    try {
+      const cloudChecked = await fetchOwnerDailyMed(ownerId, dateAtCallTime);
+      await saveDailyMedLocalOnly(dateAtCallTime, cloudChecked);
+      // 拉取期間使用者瀏覽的日期已經變了（例如跨過午夜），這次拉到的資料
+      // 是舊日期的，不能拿來覆蓋畫面目前顯示的（新）日期。
+      if (dateAtCallTime !== activeDateRef.current) return;
+      setChecked(cloudChecked);
+    } catch (e) {
+      console.warn('[DailyMedScreen] 重新拉取每日用藥失敗，保留本機狀態:', e.message);
+    }
+  }
+
+  // Owner 模式：畫面每次取得 focus（含第一次掛載／冷啟動）都重新拉取一次，
+  // 修正「App 冷啟動第一次看到的是本機舊資料，要背景切回前景一次才會更新」
+  // 的問題——單靠下面的 AppState 監聽無法涵蓋冷啟動，因為 'change' 事件
+  // 只在已掛載後才會因狀態轉換觸發，不會在初次掛載時補發一次。
+  useFocusEffect(useCallback(() => {
+    if (isViewerMode) return;
+    refreshDailyMedFromCloud(activeDate);
+  }, [isViewerMode, activeDate, session?.user?.id]));
+
+  // Owner 模式：App 從背景切回前景時，同樣重新拉取一次，避免多裝置間
+  // 勾選狀態不同步。Viewer 模式已經有自己的 useFocusEffect 機制（見下方），
+  // 這裡不重複處理。
+  const appStateRef = useRef(AppState.currentState);
+  useEffect(() => {
+    if (isViewerMode) return undefined;
+
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      const cameToForeground = appStateRef.current !== 'active' && nextAppState === 'active';
+      appStateRef.current = nextAppState;
+      if (!cameToForeground) return;
+      refreshDailyMedFromCloud(activeDate);
+    });
+
+    return () => subscription.remove();
+  }, [isViewerMode, activeDate, session?.user?.id]);
+
   // Load viewer data when entering viewer mode or switching owner
   useEffect(() => {
     if (!isViewerMode || !activeOwner) {
@@ -78,7 +134,11 @@ export default function DailyMedScreen() {
   // Load viewer daily med for active date
   useEffect(() => {
     if (!isViewerMode || !activeOwner) { setViewerChecked({}); return; }
-    fetchOwnerDailyMed(activeOwner.id, activeDate).then(setViewerChecked);
+    fetchOwnerDailyMed(activeOwner.id, activeDate)
+      .then(setViewerChecked)
+      .catch((e) => {
+        console.warn('[DailyMedScreen] 讀取檢視者每日用藥失敗，保留原有畫面狀態:', e.message);
+      });
   }, [isViewerMode, activeOwner?.id, activeDate]);
 
   // 切換身份時確認抗凝血每日提醒（早晚各一筆）是否已排程（idempotent）
@@ -97,7 +157,11 @@ export default function DailyMedScreen() {
       const dateKey = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
       let dayChecked = {};
       if (isViewerMode && activeOwner) {
-        dayChecked = (await fetchOwnerDailyMed(activeOwner.id, dateKey)) || {};
+        try {
+          dayChecked = (await fetchOwnerDailyMed(activeOwner.id, dateKey)) || {};
+        } catch (e) {
+          console.warn('[DailyMedScreen] 讀取歷史用藥紀錄失敗，該天顯示為空:', e.message);
+        }
       } else {
         const data = await loadDailyMed(dateKey);
         dayChecked = data.checked || {};

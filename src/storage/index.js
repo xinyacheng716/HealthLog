@@ -167,6 +167,14 @@ export async function saveDailyMed(date, checked) {
   } catch {}
 }
 
+// 只寫本機、不推雲端——給「剛從雲端拉回資料、要落地存本機」的情境用，
+// 避免拉下來又立刻推回去的空轉請求。
+export async function saveDailyMedLocalOnly(date, checked) {
+  try {
+    await AsyncStorage.setItem(KEYS.dailyMed(date), JSON.stringify({ date, checked }));
+  } catch {}
+}
+
 export async function loadAppointments() {
   try {
     const raw = await AsyncStorage.getItem('appointments');
@@ -179,6 +187,14 @@ export async function saveAppointments(list, newAppointment = null) {
   try {
     await AsyncStorage.setItem('appointments', JSON.stringify(list));
     if (newAppointment) pushAppointmentToCloud(newAppointment);
+  } catch {}
+}
+
+// 只寫本機、不推雲端——給「剛從雲端拉回資料、要落地存本機」的情境用，
+// 避免拉下來又立刻推回去的空轉請求。
+export async function saveAppointmentsLocalOnly(list) {
+  try {
+    await AsyncStorage.setItem('appointments', JSON.stringify(list));
   } catch {}
 }
 

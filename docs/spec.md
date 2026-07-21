@@ -36,6 +36,8 @@
 | 目標平台 | iOS（TestFlight 內部測試）|
 | Bundle ID | `com.sophiechenggg.healthlog` |
 | Expo Project ID | `1d365195-d613-44a9-a742-77a94055c6f9` |
+| Team ID | `Q3AB8UHDUY` |
+| 正式版本部署 | **本機打包 + 手動簽章**（2026/07/11 起，`eas build` 停用於正式版本，見 9-5、8-2）|
 
 > 查閱 Expo API 時使用 https://docs.expo.dev/versions/v54.0.0/
 
@@ -302,6 +304,24 @@ HealthAppFresh/
 └── assets/
 ```
 
+### 4-4. 前景刷新同步（Pull Sync，實作中）
+
+**問題**：3-2、3-3 描述的 `cloudSync.js` 函式全部是「本機 → 雲端」單向 push。裝置 A 編輯資料成功推上雲端後，裝置 B（同帳號、App 保持開啟中）不會自動看到這筆更新，除非重新啟動 App 觸發一次 `initSync` hydration。
+
+**Layer 1 解法（前景刷新，分資料類型逐步推進中）**：
+- 監聽機制：`AppState.addEventListener('change', ...)`，用 ref 記錄前一個狀態，判斷是否為「從非 active 變成 active」的瞬間
+- 觸發條件：只在 Owner 模式執行（`!isViewerMode`）；Viewer 模式已有自己的 `useFocusEffect` 機制，不重複處理
+- 寫回本機：拉回的雲端資料需用專屬的 `*LocalOnly()` 函式寫入本機，不可用會順便推雲端的既有 save 函式，避免「拉下來又推上去」的空轉
+- 錯誤處理：查詢「當天雲端真的沒資料」與「查詢層級錯誤（RLS／連線問題）」必須分開處理（用 Supabase 的 `PGRST116` 錯誤碼判斷），否則查詢出錯會把本機正確資料靜默覆蓋成空的
+
+**推進順序**：
+1. `daily_med_checks`（每日用藥）— 邏輯已完成並修正兩輪問題，見 `docs/devlog.md` Build 31／32，本機驗證通過，等候 TestFlight
+2. `appointments`（行程）— 下一項
+3. 設定六個清單 — 需先確認能否複用既有 `refreshSettingsFromCloud` hydration 邏輯
+4. 其餘資料類型 — 比照辦理
+
+**Layer 2（未來）**：Supabase Realtime 訂閱，真正雙向即時同步，改動範圍較大，留待 Layer 1 全部資料類型上線後再評估。
+
 ---
 
 ## 5. 畫面規格
@@ -505,21 +525,20 @@ npx expo start --dev-client
 # 程式碼改動熱更新，不需 build
 ```
 
-### 8-2. Build + Submit（正式版本）
+### 8-2. 正式版本送出流程（本機打包 + 手動簽章，唯一流程）
 
-```bash
-# Build（在普通 Terminal，不要在 Claude Code 裡跑）
-cd ~/Downloads/Projects/HealthAppFresh
-eas build --platform ios
+> **⚠️ 2026/07/11 起變更**：正式版本一律**停用 `eas build`**。Build 24 透過 `eas build --profile production` 送出後，爸爸 iPad／媽媽 iPhone 全白屏，排查後確認是 `eas build` 雲端建置流程產生的 JS bundle 跟本機建置版本位元組不同，根本原因未知（見 `docs/devlog.md` C-009、C-010）。往後正式版本一律走本機打包 + 手動簽章流程，詳細步驟見 `docs/CLAUDE.md`「更新與打包流程」。`eas submit` 本身沒有問題，維持使用。
 
-# Submit（若卡住超過 15 分鐘，改用 Transporter）
-eas submit --platform ios --latest
-```
+流程摘要（完整指令見 `docs/CLAUDE.md`）：
+1. `npx expo export:embed` 本機打包 JS（不經 EAS 雲端）
+2. 本機 `hermesc` 編譯成 Hermes bytecode
+3. 置換進乾淨、已知能動的 Build 27 殼子（原生層已驗證沒問題）
+4. 補 provisioning profile、改高版本號
+5. 清除舊簽章與 macOS 隱藏中繼資料、重新 `codesign`
+6. `codesign --verify --deep --strict` 驗證
+7. 打包 ipa，`eas submit --platform ios --path <ipa>` 送出
 
-**Transporter 備用上傳：**
-1. Mac App Store 搜尋「Transporter」（Apple 官方，免費）
-2. 從 expo.dev 下載 .ipa 檔案
-3. 拖入 Transporter → 用 Apple ID 登入 → 按 Deliver
+Development Build（`eas build --profile development`）不受影響，日常開發測試照常使用。
 
 ### 8-3. EAS Build 額度管理
 - 免費方案：每月 15 次 iOS build
@@ -531,18 +550,18 @@ eas submit --platform ios --latest
 | | Development Build | TestFlight |
 |--|--|--|
 | 圖示 | 恐龍（粉紅色）| 正常 App 圖示 |
-| 安裝方式 | `eas build --profile development` 後掃 QR 安裝 | 透過 TestFlight App |
-| 熱更新 | ✅（Metro 連線時）| ❌（需重新 build + submit）|
+| 安裝方式 | `eas build --profile development` 後掃 QR 安裝 | 透過 TestFlight App，正式版本以本機打包 + 手動簽章送出（見 8-2）|
+| 熱更新 | ✅（Metro 連線時）| ❌（需重新走本機打包 + 簽章流程送出）|
 | Apple Sign In | ✅ | ✅ |
 | 用途 | 開發測試 | 給用戶使用 |
 
 ### 8-5. TestFlight 測試人員
 | 姓名 | Apple ID | 狀態 |
 |------|---------|------|
-| ChengJui Hsi（爸爸）| rayjhcheng@gmail.com | 已安裝 1.0.0 (16) |
+| ChengJui Hsi（爸爸）| rayjhcheng@gmail.com | 已安裝，Build 24 白屏事故受影響裝置（iPad）之一 |
 | 程歆雅（開發者）| sophiecheng0716@gmail.com | 已安裝 |
 | 程偉綸（弟弟）| williammantou@gmail.com | 已邀請 |
-| ChenElysia（媽媽）| elysiachentp@gmail.com | 待確認 |
+| ChenElysia（媽媽）| elysiachentp@gmail.com | 已在使用中，Build 24 白屏事故受影響裝置（iPhone）之一 |
 
 > 新增內部測試人員：先在 Apple Developer 後台加為成員 → 再到 App Store Connect → TestFlight → 測試人員加入
 
@@ -566,3 +585,9 @@ Metro log 常見 `SafeAreaView has been deprecated` 警告，這是 Expo SDK 54 
 
 ### 9-4. eas submit 可能卡住
 EAS Submit 有時會在 `waiting for an available submitter` 卡住超過 15 分鐘，這是 EAS 雲端佇列問題，不是程式碼問題。改用 Transporter 可完全繞過此問題。
+
+### 9-5. eas build 雲端建置在正式版本上不可靠（2026/07/11 起停用）
+Build 24 透過正常 `eas build --profile production` 送出後，爸爸 iPad、媽媽 iPhone 全白屏，開發者自己的 dev client 從未重現。排查後確認：問題不在 Build 24 新增的功能本身（完整退回原始碼、重新透過 `eas build` 建置測試依然白屏），而是 `eas build` 產生的 JS bundle 跟真正能動的版本位元組層級不同，**根本原因未知**。往後正式版本一律改用本機打包 + 手動簽章流程（見 8-2、`docs/CLAUDE.md`），`eas build --profile development` 不受影響、日常開發照常使用。完整排查過程見 `docs/devlog.md` C-009。
+
+### 9-6. git 上的原始碼不等於已驗證的運作版本
+即使原始碼邏輯完全等於某個已知正常的版本，透過 `eas build` 重新建置出來的東西依然可能白屏（見 9-5）。這代表 `git diff` 只能檢查邏輯是否合理，不能證明這份原始碼建置出來會不會動——任何改動都必須實際走一次本機打包流程、裝到實機測試過，才算數驗證。詳見 `docs/devlog.md` C-010。

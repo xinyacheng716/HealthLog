@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
-  View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, KeyboardAvoidingView,
+  View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, KeyboardAvoidingView, AppState,
 } from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, cardShadow, TYPE_COLORS } from '../constants/colors';
-import { loadAppointments, saveAppointments } from '../storage';
+import { loadAppointments, saveAppointments, saveAppointmentsLocalOnly } from '../storage';
 import { deleteAppointmentFromCloud } from '../lib/cloudSync';
 import { useViewer } from '../context/ViewerContext';
+import { useAuth } from '../context/AuthContext';
 import { fetchOwnerAppointments } from '../lib/viewerData';
 import CalendarView from '../components/CalendarView';
 import AppointmentSection from '../components/AppointmentSection';
@@ -31,6 +33,7 @@ function apptDateKey(appt) {
 
 export default function CalendarScreen() {
   const { isViewerMode, activeOwner } = useViewer();
+  const { session } = useAuth();
   const insets = useSafeAreaInsets();
   const today = todayKey();
 
@@ -56,13 +59,65 @@ export default function CalendarScreen() {
     loadAppointments().then(setAppointments);
   }, []);
 
+  // TEMP DEBUG：暫時拿來在畫面上確認前景刷新有沒有真的觸發、什麼時候觸發，
+  // 穩定後要整段移除。
+  const [syncDebugInfo, setSyncDebugInfo] = useState(null);
+
+  // Owner 模式：重新從雲端拉取所有行程，直接更新畫面 state（不是只寫本機、
+  // 等下次掛載被動撿到）。AppState 前景轉換、畫面 focus 兩個觸發來源共用
+  // 這支函式，比照 daily med（Build 31/32）的做法。
+  async function refreshAppointmentsFromCloud(source) {
+    const ownerId = session?.user?.id;
+    if (!ownerId) return;
+    const ts = new Date().toLocaleTimeString('zh-TW', { hour12: false });
+    setSyncDebugInfo(`[${source}] ${ts} 拉取中…`); // TEMP DEBUG
+    try {
+      const cloudAppointments = await fetchOwnerAppointments(ownerId);
+      await saveAppointmentsLocalOnly(cloudAppointments);
+      // 已知風險（這次先不處理）：如果使用者剛新增一筆行程、還沒推上雲端
+      // 成功，這時剛好觸發這支函式，會用還沒包含那筆新行程的雲端舊清單
+      // 覆蓋掉本機剛新增的那筆，導致畫面上短暫消失。
+      setAppointments(cloudAppointments);
+      setSyncDebugInfo(`[${source}] ${ts} 完成，共 ${cloudAppointments.length} 筆`); // TEMP DEBUG
+    } catch (e) {
+      console.warn('[CalendarScreen] 重新拉取行程失敗，保留本機狀態:', e.message);
+      setSyncDebugInfo(`[${source}] ${ts} 失敗：${e.message}`); // TEMP DEBUG
+    }
+  }
+
+  // Owner 模式：畫面每次取得 focus（含第一次掛載／冷啟動）都重新拉取一次。
+  useFocusEffect(useCallback(() => {
+    if (isViewerMode) return;
+    refreshAppointmentsFromCloud('focus');
+  }, [isViewerMode, session?.user?.id]));
+
+  // Owner 模式：App 從背景切回前景時，同樣重新拉取一次，避免多裝置間
+  // 行程資料不同步。
+  const appStateRef = useRef(AppState.currentState);
+  useEffect(() => {
+    if (isViewerMode) return undefined;
+
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      const cameToForeground = appStateRef.current !== 'active' && nextAppState === 'active';
+      appStateRef.current = nextAppState;
+      if (!cameToForeground) return;
+      refreshAppointmentsFromCloud('AppState');
+    });
+
+    return () => subscription.remove();
+  }, [isViewerMode, session?.user?.id]);
+
   // Load viewer data when entering viewer mode or switching owner
   useEffect(() => {
     if (!isViewerMode || !activeOwner) {
       setViewerAppointments([]);
       return;
     }
-    fetchOwnerAppointments(activeOwner.id).then(setViewerAppointments);
+    fetchOwnerAppointments(activeOwner.id)
+      .then(setViewerAppointments)
+      .catch((e) => {
+        console.warn('[CalendarScreen] 讀取檢視者行程失敗，保留原有畫面狀態:', e.message);
+      });
   }, [isViewerMode, activeOwner?.id]);
 
   // ── Actions ──────────────────────────────────────────────────────────────
@@ -124,7 +179,11 @@ export default function CalendarScreen() {
   ];
 
   const ModeBar = (
-    <View style={styles.modeBar}>
+    <>
+      {!isViewerMode && syncDebugInfo && (
+        <Text style={styles.syncDebugText}>{syncDebugInfo}</Text>
+      )}
+      <View style={styles.modeBar}>
       {TABS_DEF.map((t, i) => (
         <React.Fragment key={t.key}>
           {i > 0 && <View style={styles.modeDivider} />}
@@ -139,7 +198,8 @@ export default function CalendarScreen() {
           </TouchableOpacity>
         </React.Fragment>
       ))}
-    </View>
+      </View>
+    </>
   );
 
   // ════════════════════════════════════════════════════════════════════════
@@ -432,6 +492,16 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   scroll: { flex: 1 },
   content: { padding: 16, gap: 14 },
+
+  // TEMP DEBUG
+  syncDebugText: {
+    fontSize: 10,
+    color: colors.textMuted,
+    backgroundColor: colors.bgSection,
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    textAlign: 'center',
+  },
 
   // 2-tab mode bar
   modeBar: {

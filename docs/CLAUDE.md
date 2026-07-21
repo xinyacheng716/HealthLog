@@ -27,8 +27,8 @@
 | 認證 | Apple Sign In（`expo-apple-authentication` + `signInWithIdToken`）|
 | UUID | `uuid` 14.x + `react-native-get-random-values` |
 | 目標平台 | iOS（TestFlight 內部測試）|
-| 部署 | EAS Build（`@sophiechenggg/health-log`）|
-| App Bundle ID | `com.sophiechenggg.healthlog` |
+| 部署 | **本機打包 + 手動簽章**（`@sophiechenggg/health-log`，`eas build` 目前停用於正式版本，見下方「更新與打包流程」）|
+| App Bundle ID | `com.sophiechenggg.healthlog`｜Team ID：`Q3AB8UHDUY` |
 
 > 在動任何 Expo API 之前，先查 https://docs.expo.dev/versions/v54.0.0/ 確認正確用法。
 
@@ -235,6 +235,20 @@ HealthAppFresh/
 
 登入後（`SIGNED_IN` 事件）自動執行 `runSupplementalMigrations()`，各 flag 獨立檢查。
 
+### 前景刷新同步（Pull Sync，Layer 1，實作中）
+
+**背景**：上面這些函式都是「本機 → 雲端」的單向 push，App 從最初設計就沒有「雲端 → 本機」的主動更新機制。症狀：裝置 A 編輯資料並成功推上雲端後，裝置 B（同帳號、App 保持開啟中）不會自動看到更新，除非重新啟動 App 觸發新一次 hydration。
+
+**解法（Layer 1，前景刷新）**：`AppState.addEventListener('change', ...)`，用 ref 判斷是否為「從非 active 變成 active」的瞬間，觸發時向 Supabase 拉當下資料覆蓋本機畫面。只在 Owner 模式執行；拉回的資料寫回本機時**不要**用會順便推雲端的既有 save 函式，避免「拉下來又推上去」的空轉，需要各自資料類型獨立的 `*LocalOnly()` 寫入函式。
+
+**推進狀態**（分層、分資料類型逐步推進，不要一次全上，避免像 C-005～C-008 那樣疊太多功能難以排查）：
+1. `daily_med_checks` — ✅ 邏輯完成並修正兩輪問題（Build 31 冷啟動未觸發 → Build 32 補 useFocusEffect + 修正畫面未同步更新），本機驗證通過，Build 32 已送出等候 TestFlight
+2. `appointments` — 下一項，尚未開始
+3. 設定六個清單 — 尚未開始，需要先確認能否直接複用既有的 `refreshSettingsFromCloud` hydration 邏輯，而非重寫一套
+4. 其他資料類型 — 比照辦理，尚未開始
+
+Layer 2（Supabase Realtime 訂閱，真正雙向即時同步）改動範圍較大，留待 Layer 1 全部資料類型上線後再評估，詳見 `docs/devlog.md`「已知架構限制」。
+
 ---
 
 ## 檢視者模式（ViewerMode）
@@ -292,11 +306,14 @@ HealthAppFresh/
 - 所有 AsyncStorage 操作包 try/catch
 - Slider：`@react-native-community/slider`
 - 顏色：`import { colors } from '../constants/colors'`，不硬寫色碼
-- 所有 cloudSync 函式 fire-and-forget，失敗只 console.warn，不阻塞 UI
+- 所有 cloudSync 函式 fire-and-forget，失敗只 console.warn，不阻塞 UI（但失敗時會進 `syncQueue.js` 佇列自動重試，見上方「雲端同步邏輯」）
+- 終端機顯示 `git diff`／`git log` 相關內容時一律用 `git --no-pager diff`／`git --no-pager log`（或接 `| cat`），避免跳進 `less` 分頁工具卡住畫面
 
 ---
 
 ## 更新與打包流程
+
+> **⚠️ 2026/07/11 起重大變更**：正式版本（要給爸媽用的 TestFlight 版本）**一律停用 `eas build`**。原因是 Build 24 上線後爸爸 iPad／媽媽 iPhone 全白屏，排查後確認是 `eas build` 雲端建置流程產生的 JS bundle 跟本機建置的版本位元組不同，根本原因未知（見 `docs/devlog.md` C-009、C-010）。往後正式版本一律走本機打包 + 手動簽章流程，**不要建議或執行 `eas build --profile production`**。`eas submit` 本身沒有問題，可以照常使用。
 
 ### 日常開發（純 JS 改動，不需 build）
 
@@ -309,57 +326,32 @@ npx expo start --dev-client
 # 程式碼改動會熱更新，不需重新 build
 ```
 
-### 需要 build 的情況
-- 新增原生模組（如 expo-apple-authentication）
-- 修改 app.json 的 native 設定
-- 正式版本要給 TestFlight 用戶更新
+> Development Build（`eas build --profile development`）目前仍正常，白屏問題只出現在 production profile 的 build，dev client 從未重現過。日常開發、UI 改動確認都可以照常用 dev client，不受這次事故影響。
 
-### Build + Submit 流程
 
-```bash
-# 1. Build（在普通 terminal 跑，不要在 CC 裡面）
-cd ~/Downloads/Projects/HealthAppFresh
+### ⚠️ 原始碼與實際運作版本可能有落差
 
-# 日常開發測試（裝 dev client，之後可用 npx expo start --dev-client
-# 反覆測試，不用每次改 code 都重新 build）
-cd ~/Downloads/Projects/HealthAppFresh
-eas build --platform ios --profile development
+目前 git 上的原始碼，跟實際裝置上跑的 app，**不是同一份被驗證過的東西**——即使把原始碼邏輯完全退回到「看起來」等於某個已知正常的版本，透過 `eas build` 重新建置出來的東西依然可能白屏（根本原因未解，見 `docs/devlog.md` C-010）。這代表：
 
-# 正式版本，要送 TestFlight 給爸爸用時才跑（跑完還要 eas submit）
-cd ~/Downloads/Projects/HealthAppFresh
-eas build --platform ios --profile production
+- **每次改完程式碼，不能只靠 `git diff` 看邏輯合不合理就假設沒問題**，必須實際走一次本機打包流程，裝到自己手機測試過，才算數
+- 協助排查白屏或類似「本機正常、實機異常」的問題時，優先懷疑建置工具鏈（EAS 雲端建置 vs 本機建置的 bytecode 差異），而不是只在程式碼邏輯裡打轉
+- 如果之後要認真查 `eas build` 產出跟本機建置產出為什麼不同，`ver27.ipa`（未置換過的原始 Build 27 樣本）跟 `old_build23.ipa`（真正原廠 Build 23）是現成的比對材料
 
-# ⚠️ 絕對不要只打 eas build --platform ios（不加 --profile）
-# 會跳出互動選單要你手動選，容易選錯（曾經誤選成 production，
-# 浪費一次 build 額度還把 buildNumber 往上加了一次）
-
-# 2. Submit（eas submit 有時候會卡，備用方案是 Transporter App）
-eas submit --platform ios --latest
-
-# 如果 eas submit 卡住超過 15 分鐘：
-# - 從 expo.dev 下載 .ipa 檔案
-# - 用 Mac App Store 的 Transporter App 上傳
-```
-
-### EAS Build 額度
-- 免費方案：每月 15 次 iOS build
-- 每月重置（帳單週期確認：https://expo.dev/accounts/sophiechenggg/billing）
-- **節省策略**：UI 改動用 Development Build 熱更新確認，定案後才 build
 
 ### TestFlight 測試人員
 目前已加入（內部測試）：
 - ChengJui Hsi（rayjhcheng@gmail.com）- 爸爸
 - 程歆雅（sophiecheng0716@gmail.com）- 開發者
 - 程偉綸（williammantou@gmail.com）- 弟弟
-- ChenElysia（elysiachentp@gmail.com）- 媽媽（待確認）
+- ChenElysia（elysiachentp@gmail.com）- 媽媽（已在使用中，白屏事故期間她的 iPhone 也受影響）
 
 > 新增內部測試人員需先在 Apple Developer 後台加為成員，再到 App Store Connect → TestFlight → 測試人員加入
 
 ### 注意事項
 - CC 要用 claude.ai Pro 帳號登入
-- build 和 submit 要在普通 terminal 跑，不是在 CC 裡面
-- Apple 處理 build 需要 5-10 分鐘，TestFlight 才會出現新版本
-- `eas submit` 卡住時改用 Transporter App（Mac App Store 免費下載）
+- 本機打包、簽章、build 和 submit 全部都要在普通 terminal 跑，不是在 CC 裡面
+- Apple 處理 submit 需要 5-10 分鐘，TestFlight 才會出現新版本
+- 打包用的資料夾固定在 `~/Downloads/HealthApp Builds/`（`01原始樣本`／`02乾淨打包外殼`／`03已送出版本`，數字跟中文字之間**沒有空格**），2026/07/19 起已從 Desktop 搬離歸檔完畢，之後打包一律用這個路徑，不用再猜
 
 ---
 

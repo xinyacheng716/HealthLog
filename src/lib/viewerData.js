@@ -75,7 +75,10 @@ export async function fetchOwnerAppointments(ownerId) {
     .eq('owner_id', ownerId)
     .order('appt_time', { ascending: false });
 
-  if (error) { console.warn('[viewerData] appts:', error.message); return []; }
+  // 查詢真的出錯（RLS、連線等）要往外拋，讓呼叫端自己決定怎麼處理——
+  // 不能跟「這個帳號本來就沒有任何行程」（data 為空陣列、沒有 error）
+  // 用同一個 [] 混在一起，否則查詢失敗會被誤判成「沒有行程」。
+  if (error) throw new Error(error.message);
 
   return (data || []).map((row) => ({
     id: row.id,
@@ -95,7 +98,11 @@ export async function fetchOwnerDailyMed(ownerId, date) {
     .eq('check_date', date)
     .single();
 
-  if (error || !data) return {};
+  // PGRST116 = .single() 查無資料列，代表當天真的沒有勾選紀錄，是正常空狀態。
+  // 其他任何 error 都是查詢層級的真實錯誤（RLS、連線等），throw 出去讓呼叫端判斷，
+  // 不能跟「正常空狀態」用同一個 {} 混在一起，否則呼叫端無法分辨查詢是否失敗。
+  if (error && error.code !== 'PGRST116') throw new Error(error.message);
+  if (!data) return {};
   return data.checked || {};
 }
 

@@ -26,8 +26,14 @@
 | 21 | Jul 9 | Production | initSync settings 獨立拉取，不受 logs 保護跳過（v3）|
 | 22 | Jul 9 | Production | hasLocalData guard（觸發 race condition，資料被蓋掉，見 C-004）|
 | 23 | Jul 9 | Production | 修正 race condition，Supabase 資料手動還原，flag v4 |
+| 24 | Jul 11 | Production（**白屏事故，已下架**）| mergeNew 修復 + hydration 強化 + 失敗重試佇列 + 行事曆 UI 改版，透過 `eas build` 送出後爸爸 iPad／媽媽 iPhone 全白屏，見 C-009 |
+| 27 | Jul 11–12 | Production（**本機打包 + 手動簽章**）| 白屏修復：本機打包 Build 23 邏輯（不含行事曆改版），置換進乾淨殼子重新簽章送出，繞開 `eas build`，見 C-009／C-010 |
+| 30 | Jul 12 | Production（**本機打包 + 手動簽章**）| 加回行事曆 UI 改版（本機打包含新功能 JS，同樣置換流程），**目前爸媽裝置上實際執行版本** |
+| 31 | Jul 12 | Production（**實測失敗**）| 每日用藥前景刷新同步第一版，只監聽 AppState 轉場事件，冷啟動情境下從未被觸發，實機測試無效，見 Build 32 |
+| 32 | Jul 12–18 | Production（**本機驗證通過，App Store 送出中**）| 補上 useFocusEffect 涵蓋冷啟動 + 修正拉到資料未同步更新畫面的問題，本機驗證通過，等候 TestFlight |
 
 > Build 11–13 為 Development Build（用於測試，不在 TestFlight 列表中）
+> Build 25–26、28–29：目前無對應的詳細紀錄，如之後要補上請提供內容再插入。
 
 ---
 
@@ -271,7 +277,172 @@ iPad 症狀紀錄正常，藥物清單仍顯示 12 種，根本原因尚未找�
 
 ---
 
-## 功能地圖（截至 Build 23）
+### Build 24｜Jul 11, 2026（上線後白屏，已下架）
+**四個獨立問題的根因修復：mergeNew 復活刪除項目 / hydration 顯示時序 / 六合一同步互相覆蓋 / fire-and-forget 資料遺失**
+
+Build 23 上線後，爸爸的 iPad 持續出現「已刪除的清單項目重新整理後又跑回來」「iPad 顯示的設定永遠跟手機不一致」「手機編輯的內容偶爾完全沒有同步到雲端」三種現象。逐一排查後確認這是四個獨立、疊加在一起的問題，不是同一個 bug 的殘留。
+
+**問題一：`mergeNew()` 會把使用者主動刪除的預設項目復活（根本原因，優先級最高）**
+
+`src/storage/index.js` 的 `loadSettings()`，過去每次讀取本機設定，都會用 `mergeNew(stored, defaults)` 拿現有清單跟寫死的預設值陣列（`MEDS_DEFAULT`、`SYMPTOMS_DEFAULT` 等六個）比對，只要預設值裡有一項不在本機清單中，就無條件補回去——不分辨這是「本機從沒存過」還是「使用者故意刪除過」。而且這個補值動作會直接寫回 AsyncStorage，永久污染本機快取，不只是當次畫面顯示錯誤。
+
+診斷過程：使用者回報刪除「克利生」（藥物清單）、「脊椎僵硬」（症狀清單）、「其他」（行程類型清單）、將「林志鵬」改名為「林志芃」（醫生清單），四個清單重新整理頁面後都會讓被刪除／改掉的項目重新出現。比對發現四個「復活」的項目，剛好精準對應到六個 `*_DEFAULT` 常數陣列裡的內容，確認就是 `mergeNew` 造成的。
+
+爸爸帳號雲端 `doctor_list` 一度同時存在「林志芃（疼痛科）」與「林志鵬（疼痛科）」兩筆，即是此 bug 的直接證據——改名操作內部是「新增新值＋刪除舊值」，刪除後的清單重新整理時被 `mergeNew` 復活了舊值，之後任一次同步又把復活的舊值一併推回雲端。
+
+**修法**：`loadSettings()` 判斷邏輯改為「只有本機 `settings` key 完全不存在（`raw === null`，代表真正的全新裝置／首次使用）才套用預設值陣列作為起始清單；只要 key 存在（哪怕清單是空陣列），完全信任本機內容，不再拿預設值比對補值」。同時移除了「清單長度跟原本不同就寫回 AsyncStorage」的條件式寫回邏輯，改成只在版本遷移時才寫回，消除了正常讀取意外污染本機快取的路徑。
+
+**問題二：`syncSettingsToCloud` 六合一 upsert，編輯任一清單會連帶覆蓋其他五個過期清單**
+
+原本的同步函式每次呼叫都把當下 local state 的六個清單（症狀、藥物、過敏、醫院、行程類型、醫生）打包成單一 upsert 推上雲端。只要本機任何一個清單當下是過期的（例如受問題一影響、被 `mergeNew` 復活過），使用者編輯任何其他清單都會把那個過期清單一併覆蓋回雲端，抹掉雲端原本正確的版本。
+
+**修法**：拆成 `syncListFieldToCloud(fieldName, listValue)`，每個欄位各自 `.update()` 單一欄位，不再用 `.upsert()` 整列覆蓋。六個 setter 各自只呼叫自己對應的欄位，互不牽連。
+
+**問題三：登入／重新整理時，畫面會先顯示本機舊資料，雲端資料到位後才「補正」，而非等雲端確認後才顯示**
+
+舊邏輯是 `useSettings` mount 時本機、雲端兩條非同步流程並行、互不等待，畫面先渲染本機（可能過期或被問題一污染的）資料，雲端資料回來後再覆蓋一次，中間有短暫的錯誤畫面閃現，且如果雲端請求恰好比某次「重新套用預設值」的本機寫入慢，就會重演 Build 22 的 race condition。
+
+**修法**：改成嚴格序列——`AuthContext` 確認登入身份 → 從 Supabase 拉該帳號 settings → 存進本機 → `useSettings` 讀本機 → 顯示。新增 `isSettingsHydrated` state（非 ref，能觸發 re-render）驅動 `App.js` 的第四層畫面判斷（`isLoading` → `!session` → `session && !isSettingsHydrated`（沿用黑底 loading）→ 主畫面），畫面在雲端資料確認前完全不顯示，不會閃現任何內容。另外用獨立的 `hasHydratedFromCloudRef` guard 六個 setter：hydration 完成前呼叫的 setter 只寫本機，不推雲端，避免推送搶跑在讀取前面。加上 4 秒逾時 fallback：逾時改讀本機快取解除畫面卡死，但 `hasHydratedFromCloudRef` 保持 false，此期間的編輯仍不會誤推雲端；真正的雲端資料晚到時會自動追上、自我修復。
+
+**問題四：所有 fire-and-forget 雲端寫入，失敗後資料靜默遺失，沒有任何重試機制**
+
+專案一開始的設計就是這樣（見 Build 16 筆記），症狀紀錄、行程、病歷、每日用藥勾選、問診備忘五種資料的推送，失敗時只 `console.warn`，不重試、使用者無感、資料永久卡在本機。實測發現：離線編輯一筆藥物紀錄的劑量後恢復網路，這筆修改不會自動補推上雲端，需要使用者手動再操作一次才會被推送。
+
+**修法**：新增 `src/lib/syncQueue.js`，提供 `enqueuePendingSync(entry)` 和 `flushPendingSyncQueue()`。五個 push 函式與四個 delete 函式（單筆刪除 + 病歷整年刪除）失敗時，改為把該筆操作記錄進 AsyncStorage 持久化的佇列（用資料表名＋主鍵或複合鍵去重，同一筆資料的多次失敗只保留最新一筆；同一筆資料先被更新佇列、後被刪除佇列，刪除會正確覆蓋更新），在每次 hydration 成功完成（`hasHydratedFromCloudRef.current = true` 之後）自動觸發 flush，依序重試佇列中所有項目，全程不跳出任何 Alert，符合「使用者不需要知道，只要最終真的同步成功」的需求。
+
+**驗證方式**：這四項修法全程用 dev client 驗證，包含：模擬全新裝置（清空本機 settings，確認 hydration 四步驟＋畫面無閃現＋預設值不會被誤推雲端）、真實斷網情境（飛航模式，確認離線編輯不推送、恢復網路後 syncQueue 自動補推）、單欄位同步隔離性（編輯單一清單，SQL 逐欄比對其餘五欄完全不變）。
+
+**⚠️ 後續（Jul 11）**：dev client 驗證通過後，正式版本另外加上了行事曆 UI 改版，透過正常 `eas build --profile production` 建置送出。上線後爆發白屏事故，詳見下方 Build 27／C-009／C-010。
+
+---
+
+### Build 27｜Jul 11–12, 2026（本機打包，繞開 eas build）
+**白屏事故修復：改用本機打包 + 手動簽章送出**
+
+Build 24 上線後，爸爸的 iPad、媽媽的 iPhone 打開 TestFlight App 立刻整片白屏（無延遲，非 loading 卡住），開發者自己的 dev client 完全正常、從未重現。完整排查與根本原因見 **C-009**。
+
+排查後確認：**問題不在 Build 24 新增的功能本身**（完整退回原始碼、透過正常 `eas build` 重新建置測試，退回版本依然白屏），而是 `eas build`（EAS 雲端建置流程）本身，在這個時間點，產生的 JS bundle 跟真正能正常運作的版本，位元組層級就是不一樣——根本原因未知。
+
+**解法（本輪起成為往後唯一送出流程，詳見 C-010）**：完全繞開 `eas build`，改用本機打包＋手動簽章。以下是實際跑過、確認有效的完整版本（folder 路徑、檔名以實際專案為準）：
+
+**Step 1 — 本機用 Metro 打包 JS**（不經過 EAS 雲端）
+```bash
+cd ~/Downloads/Projects/HealthAppFresh
+npx expo export:embed --platform ios --dev false \
+  --bundle-output /tmp/new_bundle.jsbundle \
+  --assets-dest /tmp/new_bundle_assets \
+  --entry-file index.js
+```
+
+**Step 2 — 編譯成 Hermes bytecode**（`expo export:embed` 只做到 Metro 打包，不會自動編譯 bytecode，這是正式流程裡 Xcode 階段才會做的事，需手動補上）
+```bash
+node_modules/react-native/sdks/hermesc/osx-bin/hermesc \
+  -O -emit-binary -out=/tmp/new_bundle.hbc /tmp/new_bundle.jsbundle
+file /tmp/new_bundle.hbc   # 必須顯示 "Hermes JavaScript bytecode, version 96"
+```
+> ⚠️ 輸出路徑一定要在 `/tmp`，不要用 `~/Desktop`：Desktop 若開了 iCloud Drive 同步，會讓 hermesc 的暫存檔重新命名失敗（`No such file or directory`）。
+
+**Step 3 — 解壓縮一份乾淨、已知能動的殼子**（原生層已驗證沒問題，可重複使用；工作資料夾直接在 `~/Downloads` 底下解壓縮，不要放 `~/Desktop`，見下方「本機打包簽章操作坑」的 iCloud 那條；路徑含空格，`cd` 一定要用雙引號整段包住）
+```bash
+cd ~/Downloads
+rm -rf sync_test_extracted
+mkdir -p sync_test_extracted
+unzip -q "$HOME/Downloads/HealthApp Builds/02乾淨打包外殼/new_build.ipa" -d sync_test_extracted
+ls sync_test_extracted/Payload/   # 應該看到 app.app
+```
+
+**Step 4 — 換檔案、改版本號、重新簽章**（送出前務必去 App Store Connect → TestFlight 核對目前最高 build number，版本號要比它更高，這裡假設是 32）
+```bash
+cd ~/Downloads
+
+cp /tmp/new_bundle.hbc sync_test_extracted/Payload/app.app/main.jsbundle
+rm -rf sync_test_extracted/Payload/app.app/assets
+cp -R /tmp/new_bundle_assets sync_test_extracted/Payload/app.app/assets
+
+cp ~/Downloads/Projects/HealthAppFresh/credentials/ios/profile.mobileprovision \
+  sync_test_extracted/Payload/app.app/embedded.mobileprovision
+
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 32" sync_test_extracted/Payload/app.app/Info.plist
+
+xattr -cr sync_test_extracted/Payload/app.app
+find sync_test_extracted/Payload/app.app -name ".DS_Store" -delete
+find sync_test_extracted/Payload/app.app -name "._*" -delete
+rm -rf sync_test_extracted/Payload/app.app/_CodeSignature
+for fw in sync_test_extracted/Payload/app.app/Frameworks/*.framework; do
+  rm -rf "$fw/_CodeSignature"
+done
+
+for fw in sync_test_extracted/Payload/app.app/Frameworks/*.framework; do
+  codesign -f -s "iPhone Distribution: Xinya Cheng (Q3AB8UHDUY)" "$fw"
+done
+codesign -f -s "iPhone Distribution: Xinya Cheng (Q3AB8UHDUY)" \
+  --entitlements "$HOME/Downloads/HealthApp Builds/02乾淨打包外殼/entitlements.plist" \
+  sync_test_extracted/Payload/app.app
+
+codesign --verify --deep --strict --verbose=4 sync_test_extracted/Payload/app.app
+```
+必須看到 `valid on disk` + `satisfies its Designated Requirement` 才能繼續下一步。工作資料夾在 `~/Downloads` 底下，不受 iCloud 同步干擾，正常情況一次就會過，不用像 Build 33 那次繞一輪才發現要搬家。
+
+**Step 5 — 打包、送出到「已送出版本」歸檔**（`eas submit` 本身沒問題，只有 `eas build` 有問題，所以 submit 階段維持不變）
+```bash
+cd ~/Downloads/sync_test_extracted
+zip -qry "$HOME/Downloads/HealthApp Builds/03已送出版本/sync_test_v32.ipa" Payload
+
+cd ~/Downloads/Projects/HealthAppFresh
+eas submit --platform ios --path \
+  "$HOME/Downloads/HealthApp Builds/03已送出版本/sync_test_v32.ipa"
+
+cd ~/Downloads
+rm -rf sync_test_extracted   # 送出成功後工作資料夾可以直接刪，成品已經在「03已送出版本」了
+```
+
+本次只把「真正能動的 Build 23 邏輯」（不含行事曆改版）換進殼子，作為第一個安全網先確認白屏問題本身已解決。
+
+---
+
+### Build 30｜Jul 12, 2026（本機打包，加回行事曆）
+**加回行事曆 UI 改版**
+
+沿用 Build 27 建立的本機打包＋手動簽章流程，這次本機打包的 JS 內容包含行事曆 UI 改版的程式碼，同樣置換進乾淨殼子重新簽章送出。**這是目前爸媽裝置上實際在跑的版本**（在每日用藥同步這批改動送出前）。
+
+---
+
+### Build 31｜Jul 12, 2026（本機打包，實測失敗）
+**每日用藥前景刷新同步（Phase 1 第一項資料類型）——第一版**
+
+App 從最初設計開始就只有「本機 → 雲端」的單向 push，從未有「雲端 → 本機」的主動更新機制（詳見「已知架構限制」）。症狀：爸爸在手機上勾了藥、開了症狀紀錄，資料有推上 Supabase，但 iPad 永遠不會主動再去雲端拉一次最新版本，不管重新整理幾次都一樣。本次先針對 `daily_med_checks` 一項資料實作 Phase 1 解法：App 從背景切回前景時主動拉取雲端當下資料覆蓋本機畫面。
+
+**檔案異動**：`DailyMedScreen.js`（主要邏輯）、`src/storage/index.js`（新增 `saveDailyMedLocalOnly`）、`src/lib/viewerData.js`（`fetchOwnerDailyMed` 錯誤處理修正）。
+
+**核心邏輯**：
+- `AppState.addEventListener('change', ...)`，用 `appStateRef` 判斷是否為「從非 active 變成 active」的瞬間，觸發時呼叫 `fetchOwnerDailyMed(ownerId, activeDate)`
+- 只在 Owner 模式執行（`!isViewerMode`），Viewer 模式本來就有自己的 `useFocusEffect` 機制，不重複處理
+- 拉回來的資料用新增的 `saveDailyMedLocalOnly()` 寫回本機——**特意不用**既有的 `saveDailyMed()`，因為那個函式會順便推回雲端，造成「拉下來又推上去」的無意義空轉
+
+**順手修正一個潛在的資料覆蓋風險**：`fetchOwnerDailyMed` 原本 `if (error || !data) return {}`，把「當天雲端真的沒資料」（正常情況）跟「查詢層級錯誤，例如 RLS／連線問題」（不正常）混在一起處理，會導致查詢出錯時把本機正確資料靜默覆蓋成空的。已修正為用 `PGRST116` 錯誤碼分辨：查無資料回傳 `{}`，其他錯誤一律 `throw`，並確認三個呼叫點（前景刷新、Viewer 當日讀取、七日歷史迴圈）都有妥善的 `try/catch`。
+
+**⚠️ 實機測試結果：裝上爸爸 iPad 後不管重新整理幾次都沒有更新畫面。** 根因見下方 Build 32：`AppState` 的 `change` 事件只會在「JS runtime 還活著、只是被暫停後醒過來」時觸發，但爸爸實際的使用間隔（數小時到一天）長到 iOS 幾乎必然已經把 App 進程默默終止，下次點開其實是冷啟動，不是喚醒——冷啟動當下沒有「之前的狀態」可以拿來比較轉換，所以這段程式碼實際上從未被觸發過。
+
+---
+
+### Build 32｜Jul 12–18, 2026（本機打包，實機驗證通過，App Store 送出中）
+**每日用藥前景刷新同步——修正冷啟動缺口 + 修正「要關閉重開才看得到最新資料」**
+
+**問題一：Build 31 只涵蓋「背景恢復」，沒有涵蓋冷啟動**（見上方 Build 31 測試結果）。解法：新增 `useFocusEffect`（`@react-navigation/native`），在 `DailyMedScreen` 每次取得焦點時（冷啟動後第一次進到這個 tab、從其他 tab 切回來、`AppState` 恢復）都觸發拉取，不再只依賴 `AppState` 的轉場事件。原本的拉取邏輯抽成具名函式 `refreshDailyMedFromCloud(source)`，`source` 參數記錄這次是被 `'AppState'` 還是 `'focus'` 觸發，`AppState` 監聽與 `useFocusEffect` 兩處呼叫同一支函式，不重複邏輯。
+
+**問題二：即使 `useFocusEffect` 觸發、雲端資料確實拉到了，畫面第一次顯示的還是舊資料，要把 App 關掉重開才會顯示正確內容。** 根因：`refreshDailyMedFromCloud` 原本只把拉到的資料寫進 AsyncStorage（`saveDailyMedLocalOnly`），沒有同時更新畫面實際在渲染的 state——寫入硬碟跟畫面顯示是兩件事，只寫硬碟不會觸發重新渲染，要等下一次「初次掛載讀 AsyncStorage」才會被動撿到新值，造成「永遠慢一步」的假象。解法：`refreshDailyMedFromCloud` 拉到資料、寫入 AsyncStorage 的同時，直接呼叫畫面用來渲染的 `setChecked`（或對應 state setter）更新畫面。
+
+**保護措施**：寫入 AsyncStorage（`saveDailyMedLocalOnly`）不論日期是否仍是使用者當下瀏覽的日期都會執行——落地寫本機快取本身沒有副作用；但更新畫面顯示（`setChecked`）**只有**日期仍對得上使用者當下的 `activeDate` 才會覆蓋，避免非同步拉取回來時使用者已經手動切到別的日期，卻被舊的拉取結果蓋掉畫面。
+
+**除錯機制（暫時性，之後移除）**：「今日用藥」子分頁最上方加了一行小字 `syncDebugInfo`，顯示「上次同步時間／觸發來源（AppState 或 focus）／結果（成功／查無資料／錯誤訊息）」，只在 Owner 模式顯示，用來在正式環境（Console.app 看不到 production 的 `console.log`）肉眼確認同步邏輯有沒有跑、跑到什麼結果，不用再靠猜。
+
+**打包送出流程**：沿用 Build 27 建立的本機打包 + 手動簽章流程（完整指令見 Build 27），版號設為 32。
+
+**狀態**：本機驗證通過（自己裝置直接安裝簽章 ipa 測試，兩個問題皆已確認修復），目前 `eas submit --path` 送出中，等候 Apple 處理完成、進入 TestFlight 後讓爸爸更新測試。
+
+---
+
+## 功能地圖（截至 Build 32）
 
 ```
 健康記錄 App
@@ -302,15 +473,16 @@ iPad 症狀紀錄正常，藥物清單仍顯示 12 種，根本原因尚未找�
 │   ├── 所有行程（降冪列表 + 類型/醫院篩選）
 │   │   └── 行程詳情（時間 / 類型 / 醫院 / 醫生 / 備註 / 問診備忘）
 │   ├── 今日用藥（進度條 + 勾選框）
+│   ├── 前景刷新同步（AppState 監聽 + useFocusEffect，回到前景或取得焦點時拉雲端覆蓋本機，Build 32，本機驗證通過）
 │   └── [檢視者模式] 唯讀，checkbox disabled
 │
 ├── Tab 3 — 設定
 │   ├── 藥物過敏清單（CRUD）
-│   ├── 藥物清單（CRUD + 雲端同步）
-│   ├── 症狀清單（CRUD，「其他」固定）
-│   ├── 醫院清單（CRUD + 雲端同步，「其他」固定）
-│   ├── 行程類型清單（CRUD + 雲端同步）
-│   ├── 看診醫生清單（CRUD + 雲端同步）
+│   ├── 藥物清單（CRUD + 雲端同步，單欄位更新）
+│   ├── 症狀清單（CRUD，「其他」固定，單欄位更新）
+│   ├── 醫院清單（CRUD + 雲端同步，「其他」固定，單欄位更新）
+│   ├── 行程類型清單（CRUD + 雲端同步，「其他」可刪除，單欄位更新）
+│   ├── 看診醫生清單（CRUD + 雲端同步，單欄位更新）
 │   ├── 家人分享
 │   │   ├── 產生邀請碼（6碼，48小時有效）
 │   │   └── 輸入邀請碼（綁定檢視授權）
@@ -319,6 +491,15 @@ iPad 症狀紀錄正常，藥物清單仍顯示 12 種，根本原因尚未找�
 ├── 推播通知（expo-notifications）
 │   ├── 每日 10:30 AM + 10:30 PM（抗凝血劑）
 │   └── 48小時換藥提醒（嗎啡貼布勾選後觸發）
+│
+├── 資料完整性保護
+│   ├── hydration 嚴格序列（登入確認 → 拉雲端 → 存本機 → 顯示）
+│   ├── hasHydratedFromCloudRef guard（拉取完成前不推雲端）
+│   ├── syncQueue.js（五種資料 + 四個刪除函式的失敗自動重試佇列）
+│   └── loadSettings() 只在真正首次使用時套用預設值
+│
+├── 部署管線
+│   └── 本機打包 + hermesc 編譯 + 手動簽章（Build 27 起取代 `eas build`，見 C-009／C-010）
 │
 └── 雲端後端（Supabase）
     ├── 資料表：profiles / symptom_logs / daily_med_checks /
@@ -374,40 +555,90 @@ iPad 症狀紀錄正常，藥物清單仍顯示 12 種，根本原因尚未找�
 
 ---
 
-### C-009｜Build 24 白屏無法單點修復，整批退回 Build 23 行為
-**發現時間**：Build 24 之後
-**症狀**：部分裝置更新到 Build 24 後開啟 App 卡在純色畫面（白屏／深墨色屏），永遠進不了主畫面
-**根本原因（第一輪誤判）**：一開始認為問題出在 `App.js` 的 `AppContent()` 多加的第三層閘道 `if (!isSettingsHydrated)`——只要 `useSettings.js` 裡「向 Supabase 拉 settings → 存 AsyncStorage → setState」這條非同步序列卡住、且 4 秒 timeout 也沒能觸發 fallback，`isSettingsHydrated` 就永遠停在 `false`，畫面因此永久卡住。
-**第一次嘗試的解法（失敗）**：只移除「用 `isSettingsHydrated` 阻擋主畫面渲染」這個閘道本身，其餘 hydration 邏輯（`hasHydratedFromCloudRef`、cloud-first fetch、`syncQueue.js` 重試佇列等）維持不動。結果驗證後發現兩個問題：
-1. **白屏依然發生**——代表真正的根本原因在更早的地方（很可能是 `AuthContext.js` 冷啟動時 `supabase.auth.getSession().then()` 與 `onAuthStateChange` 幾乎同時觸發、或某個 await 本身掛住），不是這層渲染閘道造成的，移除它治標不治本。
-2. **引入新的資料遺失風險**——畫面提早出現後，使用者能在 `hasHydratedFromCloudRef.current` 還是 `false` 的視窗內操作（例如刪除清單項目），但這段期間 setter 會刻意跳過同步雲端；等雲端資料稍後回來，又把使用者剛剛做的本機變更蓋掉，導致「刪除後又復活」的問題重新出現。
-**最終決定**：不再嘗試修補 hybrid 狀態，而是把 Build 24 新增的東西整批移除，回到乾淨的 Build 23 行為：
-- `useSettings.js`：移除 `isSettingsHydrated`、`hasHydratedFromCloudRef` 與 cloud-first hydration `useEffect`；改回「本機沒資料（`hasLocalData === false`）才拉雲端當初始值」，六個清單的 setter 不再檢查任何 hydrated flag，本機一改就直接 fire-and-forget 推雲端
-- 刪除 `src/lib/syncQueue.js`，`cloudSync.js` 移除所有 `enqueuePendingSync`/`flushPendingSyncQueue` 呼叫，失敗改回單純 `console.warn`
-- 刪除 `CalendarScreen.js`，「月曆行程」「所有行程」搬回 `DailyMedScreen.js` 當子分頁，移除 `App.js` 裡獨立的「行事曆」Tab
-- `initSync.js` 的 `LOCAL_DATA_INIT_FLAG` 改回 `localDataInitialized_v4`
-**教訓**：白屏這類「完全進不去 App」的問題，在根本原因還沒確認前，不要只移除表面症狀的那一層防護——移除閘道前必須先驗證閘道本身就是唯一成因，否則很容易在原本問題沒解決的情況下，還把閘道原本附帶的保護（例如同步時機的安全 guard）一併拆掉，反而多造成一個資料遺失的新問題。C-005／C-006／C-008 和行事曆 UI 之後會另外、獨立地重新設計與測試，這次不在退回範圍內一併處理。
+### C-005｜mergeNew() 把使用者主動刪除的預設項目復活，且永久污染本機快取
+**發現時間**：Build 23 上線後，爸爸持續反映「刪除的東西重新整理又跑回來」
+**症狀**：藥物清單刪除「克利生」、症狀清單刪除「脊椎僵硬」、行程類型清單刪除「其他」、醫生清單把「林志鵬」改名「林志芃」，重新整理頁面後全部復原成刪除／改名前的狀態；雲端 `doctor_list` 一度同時存在改名前後兩筆資料
+**根本原因**：`loadSettings()` 內的 `mergeNew(stored, defaults)` 每次讀取都拿本機清單跟六個 `*_DEFAULT` 常數陣列比對，缺什麼就無條件補什麼，無法分辨「本機從未寫過」與「使用者故意刪除」；補值後還會直接寫回 AsyncStorage，永久覆蓋本機快取，不只是當次畫面誤顯示
+**解法**：改為只有 `AsyncStorage.getItem('settings')` 回傳 `null`（代表真正首次使用）才套用預設值；只要本機曾寫過 settings，完全信任本機內容，不再拿預設值陣列比對補值；移除「長度不同就寫回」的條件式寫回邏輯，只在版本遷移時寫回
+**教訓**：「補值 / 相容性 fallback」邏輯如果沒有區分「資料缺漏」與「使用者刻意操作」，會把使用者的刪除當成資料損毀來「修復」；任何會自動改寫使用者資料的邏輯，都必須明確定義觸發條件的邊界，且觸發後的寫回動作要謹慎——這是這整輪三次資料事故裡最根本的一個，且藏得最深，因為程式碼稽核只查「有沒有非 UI 呼叫 setter」抓不到，要靠比對「復活的項目剛好是預設值」這個規律性線索才找到
 
 ---
 
-### C-010｜爸媽裝置白屏問題最終解決，但解法是 binary patch，不是原始碼修復
-**發現時間**：C-009 退回之後
-**症狀**：爸媽的裝置持續白屏，即使已經照 C-009 把 `src/` 底下完整退回乾淨的 Build 23 邏輯，直接用這份原始碼透過 `eas build` 建置測試，實際上**仍然是白屏**。
-**最終解法**：不是原始碼修復。做法是在 `~/Desktop/build23-restore` 資料夾裡，手動把 Build 23 ipa（已驗證在爸媽裝置上正常運作）解開後的 `main.jsbundle` 與 `assets` 資料夾，直接置換進一個全新簽署的殼子（原本是 Build 27 build 出來的殼子）裡，取代殼子原本的 `main.jsbundle`／`assets`，再用 `codesign` 手動重新簽章，之後上傳 TestFlight。整個修復過程完全發生在原始碼與一般 build 流程之外，沒有經過 `src/` 的任何一行程式碼，也沒有經過 EAS 的正常 build pipeline。
-**⚠️ 重要警示**：目前 `src/` 底下的原始碼狀態，是 C-009「完整退回 Build 23 邏輯」那次的重建版本（重新用現有原始碼手動重寫 `useSettings.js`／`cloudSync.js`／`App.js` 等，模擬 Build 23 的行為），**不是**直接從 Build 23 ipa 反解出來的原始碼，兩者不保證等價。這份重建版本本身**尚未被驗證能重現這次的修復結果**——目前手上唯一被證實「爸媽裝置不會白屏」的產物，是那個被 binary patch 過的 ipa，不是這份原始碼建置出來的 build。換句話說，`src/` 目前的狀態只是「看起來邏輯上應該等於 Build 23」，不是「已驗證等於能修好白屏的版本」。
-**待辦**：
-- 真正的白屏根本原因仍然未知。懷疑與 `AuthContext.js` 冷啟動時 `supabase.auth.getSession().then()` 與 `onAuthStateChange` 幾乎同時觸發、可能導致 `initializeAndMigrate()` 被重複呼叫有關，但**未證實**，需要實機重現 log 才能定位。
-- 下次要重新挑戰 C-005／C-006／C-008 或行事曆功能之前，必須先解決「原始碼與實際運作版本不一致」這個落差——具體來說：需要先想辦法用目前 `src/` 這份原始碼透過正常 `eas build` 流程建置一次，實機驗證是否還會白屏。在這件事確認之前，不能假設 `src/` 目前的狀態是可信的基準點，也不能直接在這份原始碼上疊加新功能。
-**教訓**：當「binary patch／手動置換」被拿來當作救急手段解決緊急問題時，一定要在文件裡明確記錄「這個修復繞過了原始碼」，否則之後任何人（包含自己）看到 App 已經正常運作，很容易誤以為目前的原始碼就是那個正常運作版本的真實來源，進而在一個未經驗證的基準點上繼續開發。
+### C-006｜syncSettingsToCloud 六合一 upsert，編輯任一清單覆蓋其餘五個過期清單
+**發現時間**：與 C-005 同期，兩者疊加造成連鎖污染
+**症狀**：雲端爸爸的 `doctor_list` 同時存在改名前後兩個版本的醫生姓名
+**根本原因**：`syncSettingsToCloud` 每次呼叫都把六個清單的 local state 打包成單一 `.upsert()`。只要其中一個清單被 C-005 復活成過期版本，使用者編輯任何其他清單觸發同步時，會把那個過期清單一併推上雲端覆蓋掉正確版本
+**解法**：拆成 `syncListFieldToCloud(fieldName, listValue)`，六個 setter 各自只 `.update()` 自己對應的單一欄位，欄位之間互不牽連
+**教訓**：「一次寫入多個邏輯上獨立的欄位」在分散式（本機＋雲端）系統裡是危險模式——任何一個欄位的本機狀態不可靠，都會連坐拖累其他原本正確的欄位；欄位粒度的寫入操作應該匹配欄位粒度的持久化保證
 
 ---
 
-### C-011｜單獨重新加回「行事曆」UI（純畫面搬移，不含 C-005/006/008）
-**發現時間**：C-010 之後
-**內容**：C-009 為了排查白屏問題，曾把 Build 24 新增的東西整批移除，其中包含「行事曆」獨立 Tab 與 `CalendarScreen.js`。這次單獨、獨立地把「行事曆」這個 UI 改版加回來，其餘（C-005／C-006／C-008）維持不動、仍未重新加入。
-**範圍**：純畫面層級的搬移，不涉及任何雲端同步或資料處理邏輯——
-- 新增 `src/screens/CalendarScreen.js`：把原本在 `DailyMedScreen.js` 裡的「月曆行程」「所有行程」兩個子畫面搬過去，變成 `CalendarScreen.js` 自己的兩個子分頁
-- `src/screens/DailyMedScreen.js`：搬空後只剩「今日用藥」，不再有子分頁切換
-- `App.js`：`Tab.Navigator` 新增獨立的「行事曆」頂層 Tab（插在「歷史紀錄」與「每日用藥」之間），icon 沿用同一套「單字楷書漢字於印章方框」風格，用「曆」字
-- `useSettings.js`／`cloudSync.js`／`initSync.js`／`AuthContext.js` 這次完全沒有變動
-**待辦**：C-005（RLS／同步正確性）、C-006、C-008 這幾項仍未重新加入，之後要再獨立評估與測試後才會補回來；C-010 記錄的「原始碼與實際運作版本不一致」風險依然存在，這次的行事曆搬移只是畫面重構，不構成「已驗證原始碼可建置出不白屏版本」的證明。
+### C-007｜hydration 時序沒有嚴格化，畫面會閃現本機過期資料，且推送可能搶跑在雲端拉取之前
+**發現時間**：Build 22（見 C-004）之後持續存在，Build 24 才徹底處理
+**症狀**：iPad 開啟 App 時偶爾能看到本機舊資料先顯示一瞬間，才被雲端資料覆蓋；且不同裝置之間行為不一致（手機因本機一直沒過期而「看起來沒事」，iPad 因本機常態過期而持續把污染推回雲端）
+**根本原因**：C-004 的修法只加了「本機是 fallback 預設值時不推雲端」的部分保護，沒有做到「畫面必須等雲端資料確認回來才顯示」與「推送必須等雲端拉取完成才被允許」這兩層完整的時序保證
+**解法**：新增 `isSettingsHydrated`（`useState`，可驅動 re-render）與 `App.js` 第四層畫面判斷，登入後畫面等雲端 hydration 完成才切換到主畫面；`hasHydratedFromCloudRef` guard 涵蓋全部六個 setter；4 秒逾時 fallback 解除畫面卡死風險，且逾時期間仍不解除推送鎖定，雲端資料晚到時自我修復
+**教訓**：「補一個 guard 擋住某個已知的錯誤觸發點」跟「重新設計整個時序，讓正確順序在架構上就是唯一可能發生的順序」是兩種不同層級的修復，前者容易漏掉尚未發現的觸發路徑，後者才能真正關閉整個問題類別
+
+---
+
+### C-008｜fire-and-forget 雲端寫入失敗後資料靜默遺失，無重試機制
+**發現時間**：驗證 C-007 修法時意外發現（真實斷網測試）
+**症狀**：離線編輯一筆症狀紀錄的用藥劑量，恢復網路後這筆修改沒有自動補推上雲端，需要使用者手動再次觸發才會同步；`symptom_logs`、`appointments`、`medical_history`、`daily_med_checks`、`consult_memos` 的推送與刪除函式全數受影響（見 Build 16 筆記，此為專案一開始的既有設計，非本輪新增問題）
+**根本原因**：所有這類寫入從一開始就是 fire-and-forget，失敗只 `console.warn`，沒有任何持久化的重試機制
+**解法**：新增 `src/lib/syncQueue.js`，失敗時把該筆操作（含資料表、操作類型、payload）記錄進 AsyncStorage 持久化佇列，用主鍵或複合鍵去重（同筆資料多次失敗只留最新一筆；更新與刪除用同一 key 時，後者正確覆蓋前者），每次 hydration 成功完成後自動 flush 佇列重試，全程無使用者可見的提示（符合實際需求：使用者不需要知道失敗細節，只要最終真的同步成功）
+**教訓**：「fire-and-forget」對於使用者主動觸發、可以立即重試的操作或許可以接受，但對於背景資料同步（尤其是健康紀錄這種一旦遺失無法回溯的資料），必須有本機持久化的重試佇列作為最後一道防線；離線情境的測試不能只測「離線時不出錯」，還要測「恢復連線後資料真的補上了」
+
+---
+
+### C-009｜Build 24 白屏事故：`eas build` 雲端建置產出與本機驗證版本位元組不同，原因未知
+**發現時間**：Build 24（C-005～C-008 修法 + 行事曆 UI 改版）透過 `eas build --profile production` 正式送出後，Jul 11
+**症狀**：爸爸的 iPad、媽媽的 iPhone 打開 TestFlight App 的瞬間整片白屏，沒有零點幾秒的 loading 延遲；開發者自己的 dev client 完全正常，從頭到尾沒重現過
+**已用實證排除的可能性**（逐一列出，避免之後重複排查同樣的方向）：
+1. `react-native-worklets` missing peer dependency——Build 23（正常）與 Build 24（白屏）都缺這個依賴，不是差異點
+2. 原生層級差異——直接比對兩個 ipa 的 Mach-O 執行檔字串（13,451 vs 13,453 行），唯二差異是簽章雜湊值與簽章時間戳記，證實原生完全沒變，問題 100% 在 JS 層
+3. `useSettings()` 被重複呼叫——grep 全專案只有一處呼叫，排除
+4. Console.app 篩選機制失效——已驗證篩選機制本身正常（清空篩選能跳出大量系統雜訊），套用關鍵字篩選是真的零結果，代表 production release 版的 `console.log` 沒有被轉送到系統 log；Crash Reports 也確認沒有任何相關紀錄，代表不是 native crash，比較像是「JS thread 卡住但沒真的崩潰」
+5. Build 24 新增的功能本身（syncQueue、isSettingsHydrated、行事曆）——完整退回原始碼、重新透過正常 `eas build` 建置測試，**退回後依然白屏**，代表白屏原因不在這些新功能裡，是更早、更根本的東西
+**根本原因**：正常 `eas build`（EAS 雲端建置流程）產生的 JS bundle，跟真正能正常運作的 Build 23 的 JS bundle，位元組層級是不一樣的——**原因至今未知**。不管原始碼邏輯上「看起來」多麼等於 Build 23，透過 EAS 雲端建置出來的東西就是會白屏
+**解法**：完全繞開 `eas build`，改用本機 Metro 打包 + 本機 `hermesc` 編譯 + 手動置換進乾淨殼子 + 手動簽章 + `eas submit --path` 送出（詳細步驟見 Build 27）。此流程已驗證多次成功，往後所有正式版本一律採用，不再使用 `eas build`
+**教訓**：原生層與 JS 層要分開驗證（Mach-O 字串比對可以快速排除原生問題，把排查範圍收斂到 JS 層）；「沒有 crash report」不代表沒問題，也可能是 JS thread hang 而非真正 crash；production release 的 Hermes build，`console.log` 不會被轉送到 iOS 系統 log，不能依賴 Console.app 除錯 production build 的 JS 層錯誤；當「退回到已知正常的原始碼、用同一套建置流程建置，結果依然重現問題」，代表問題出在建置流程本身，不在程式碼邏輯，該把懷疑對象從程式碼轉移到工具鏈
+
+---
+
+### C-010｜git 上的原始碼與裝置上實際運作的 app，不是同一份被驗證過的東西
+**發現時間**：C-009 白屏事故排查期間，Jul 11–12
+**症狀**：即使把原始碼邏輯完全退回到「看起來」跟 Build 23 一樣，透過正常 `eas build` 重新建置出來的版本依然白屏；真正能正常運作的版本，全部都是「本機打包 + 手動置換」的產物，不是任何一次 `eas build` 的直接輸出
+**根本原因**：EAS 雲端建置流程本身，為什麼會產生跟本機建置不一樣的結果，根本原因未解開（曾比對過真正 Build 23 跟「透過正常 eas build 重建、從未驗證過」版本的 bytecode 字串差異，發現的差異很細碎，沒有找到像 Mach-O 比對那樣一眼能認出的兇手）
+**因應**：建立「本機打包 + hermesc 編譯 + 手動簽章」為往後**唯一**的正式版本送出流程（見 Build 27），`eas build` 在正式版本上暫停使用；`git diff` 只能檢查邏輯是否合理，不能證明這份原始碼建置出來會不會動——**每次改完程式碼，都必須實際走一次本機打包流程、裝到自己手機測試過，才算數驗證**，不能只靠看程式碼邏輯就假設沒問題
+**教訓**：「原始碼看起來正確」和「建置出來的產物實際能動」是兩件事，中間夾著整條建置工具鏈，工具鏈本身也可能是故障來源；當工具鏈的行為未知且不穩定時，「有沒有實機驗證過」比「程式碼邏輯有沒有審查過」更該是判斷一個版本能不能出貨的標準；如果之後要認真查 EAS 雲端建置的根因，`ver27.ipa`（未置換過的原始樣本）跟 `old_build23.ipa`（真正原廠 Build 23）是現成的比對材料
+
+---
+
+## 已知架構限制
+
+### 跨裝置即時同步尚未實作
+
+目前架構是 **offline-first + 單向 push（本機 → 雲端）**，只有登入／App 重新啟動時的一次性 hydration 會把雲端資料拉回本機，之後裝置執行期間不會再主動拉取。這代表：
+
+- 裝置 A 編輯一筆資料並成功推上雲端後，裝置 B（同一帳號，App 保持開啟中）**不會**自動看到這筆更新，除非裝置 B 重新啟動 App（觸發新一次 hydration）
+- 這不是 bug，是最初 offline-first 設計選擇的已知代價（單裝置情境下完全合理，多裝置同帳號情境下才暴露出缺口）
+
+**評估過的解法**：
+
+| 方案 | 優點 | 缺點 | 狀態 |
+|------|------|------|------|
+| App 回到前景時重新拉取 | 實作簡單，符合大多數使用情境（不太可能兩台裝置同時操作）| 仍非即時；需額外設計「避免覆蓋還沒推送成功的本機編輯」的保護，否則會重新引入 C-007 類型的問題 | **實作中**，見下方分層推進 |
+| Supabase Realtime 訂閱 | 真正即時，免費（不需升級方案）| 需要在每個畫面加入訂閱邏輯，改動範圍較大 | 未開始，留待前景刷新全部資料類型都上線後再評估 |
+
+實務上，因為主要使用情境是「爸爸一天內在單一裝置上操作為主，不同裝置間有數小時到一天的間隔」，選擇先做風險較低、實作量較小的「前景刷新」（Layer 1），Realtime 雙向即時同步（Layer 2）留待後續，避免像 C-005～C-008 那樣一次疊太多功能難以排查。
+
+**Layer 1（前景刷新）分層推進進度**：
+1. **每日用藥（daily_med_checks）**——✅ 邏輯已完成並修正兩輪問題（Build 31 冷啟動未觸發 → Build 32 補 useFocusEffect + 修正畫面未同步更新），**本機驗證通過**，Build 32 已送出等候 TestFlight
+2. **行程（appointments）**——下一項，尚未開始
+3. **設定頁六個清單**——尚未開始；此項較複雜，因為已有既有的 hydrate 邏輯（`refreshSettingsFromCloud`，從 Build 21 就存在，見 C-007 的 hydration 嚴格序列），前景刷新的時機點要接到既有邏輯上，不是重新寫一套，動手前需先確認能否直接複用
+4. **其他資料類型（症狀紀錄、病歷、問診備忘）**——比照辦理，尚未開始
+
+### `defaults.js` 內含真實個人健康資訊
+
+`src/constants/defaults.js` 裡的 `MEDS_DEFAULT`、`DOCTOR_DEFAULT` 等常數，內容是爸爸真實的用藥清單與看診醫生姓名（專案初期直接把當時的真實資料寫死當作預設值），這也是 C-005 mergeNew bug 之所以「復活」的內容剛好都是真實敏感資訊的原因。如果之後要將此 repo 公開（例如作品集用途），這些內容必須先替換成去識別化的範例資料，目前僅限 private repo 內部使用。
