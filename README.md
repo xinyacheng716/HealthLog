@@ -16,31 +16,45 @@ This app is inspired by my dad, a stage-four lung cancer patient who struggled t
 
 **Symptom log + history.** Log a symptom the moment it happens, timestamped automatically, so the patient always has an exact answer when the doctor asks when it started.
 
+<div align="center">
 <img src="docs/assets/symptoms_record.gif" width="300">
+</div>
 
 Every saved entry flows into History, where the patient can add what the doctor said in response, building a searchable record filterable by symptom.
 
+<div align="center">
 <img src="docs/assets/history_filter.gif" width="300">
+</div>
 
 **Calendar (with visit notes).** Track every appointment by hospital and type (MRI, CT, blood test, etc.), with a space to jot down questions before the visit so nothing gets forgotten in the room.
 
+<div align="center">
 <img src="docs/assets/calender.gif" width="300">
+</div>
 
 **Daily medication.** Check off each dose as it's taken and get notified for scheduled doses. Reminders aren't limited to simple daily pills; time-sensitive medications on non-daily cycles are scheduled precisely too, so nothing gets missed even when the app isn't open.
 
+<div align="center">
 <img src="docs/assets/daily_meds.gif" width="300">
+</div>
 
 Past intake can also be reviewed two ways: by date, looking back up to 7 days, or by medication, to quickly check whether a specific drug was taken at all within the last 7 days.
 
+<div align="center">
 <img src="docs/assets/meds_history.gif" width="300">
+</div>
 
 **Settings.** Every dropdown in the app (symptoms, medications, hospitals, appointment types, doctor names, drug allergies) is managed from one place and fully editable by the user.
 
+<div align="center">
 <img src="docs/assets/settings.gif" width="300">
+</div>
 
 **Viewer mode.** Family members view the patient's records read-only with an invite code, so anyone taking a turn at care can get up to speed in seconds.
 
+<div align="center">
 <img src="docs/assets/viewer_mode.gif" width="300">
+</div>
 
 ## A few design choices worth mentioning
 
