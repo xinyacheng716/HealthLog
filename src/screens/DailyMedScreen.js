@@ -14,9 +14,12 @@ import { fetchOwnerDailyMed, fetchOwnerMedList, fetchOwnerAllMedKeys } from '../
 import {
   ensureAnticoagulantReminder,
   ensureAnticoagulantEveningReminder,
+  ensureBeefEssenceReminder,
+  cancelBeefEssenceReminder,
   scheduleMorphinePatchReminder,
   cancelMorphinePatchReminder,
 } from '../lib/notifications';
+import { BEEF_ESSENCE } from '../constants/defaults';
 
 const SCREEN_H = Dimensions.get('window').height;
 const KAITI = Platform.OS === 'ios' ? 'STKaiti' : 'serif';
@@ -67,22 +70,34 @@ export default function DailyMedScreen() {
     activeDateRef.current = activeDate;
   }, [activeDate]);
 
+  // Owner 模式共用：「先打雲端拿這一天的最新資料，成功就存回本機快取；
+  // 失敗（離線／逾時／任何錯誤，含沒有 session）就退回讀本機快取」——
+  // 「今日用藥」前景刷新跟「7 天歷史」Modal 的 Owner 分支都是同一套邏輯，
+  // 合併成這支共用函式，兩處都呼叫它，不要各自維護一份 try/catch。
+  // 統一回傳格式：一律回傳 checked 物件本身，呼叫端不用再拆一層。
+  async function fetchDailyMedWithFallback(dateKey) {
+    const ownerId = session?.user?.id;
+    try {
+      if (!ownerId) throw new Error('no session');
+      const cloudChecked = await fetchOwnerDailyMed(ownerId, dateKey);
+      await saveDailyMedLocalOnly(dateKey, cloudChecked);
+      return cloudChecked;
+    } catch (e) {
+      console.warn('[DailyMedScreen] 拉取雲端每日用藥失敗，退回本機快取:', e.message);
+      const local = await loadDailyMed(dateKey);
+      return local.checked || {};
+    }
+  }
+
   // Owner 模式：重新從雲端拉取指定日期的用藥勾選狀態，直接更新畫面 state
   // （不是只寫本機、等下次掛載被動撿到）。AppState 前景轉換、畫面 focus
   // 兩個觸發來源共用這支函式。
   async function refreshDailyMedFromCloud(dateAtCallTime) {
-    const ownerId = session?.user?.id;
-    if (!ownerId) return;
-    try {
-      const cloudChecked = await fetchOwnerDailyMed(ownerId, dateAtCallTime);
-      await saveDailyMedLocalOnly(dateAtCallTime, cloudChecked);
-      // 拉取期間使用者瀏覽的日期已經變了（例如跨過午夜），這次拉到的資料
-      // 是舊日期的，不能拿來覆蓋畫面目前顯示的（新）日期。
-      if (dateAtCallTime !== activeDateRef.current) return;
-      setChecked(cloudChecked);
-    } catch (e) {
-      console.warn('[DailyMedScreen] 重新拉取每日用藥失敗，保留本機狀態:', e.message);
-    }
+    const checked = await fetchDailyMedWithFallback(dateAtCallTime);
+    // 拉取期間使用者瀏覽的日期已經變了（例如跨過午夜），這次拉到的資料
+    // 是舊日期的，不能拿來覆蓋畫面目前顯示的（新）日期。
+    if (dateAtCallTime !== activeDateRef.current) return;
+    setChecked(checked);
   }
 
   // Owner 模式：畫面每次取得 focus（含第一次掛載／冷啟動）都重新拉取一次，
@@ -141,11 +156,24 @@ export default function DailyMedScreen() {
       });
   }, [isViewerMode, activeOwner?.id, activeDate]);
 
-  // 切換身份時確認抗凝血每日提醒（早晚各一筆）是否已排程（idempotent）
+  // 切換身份時確認每日提醒（抗凝血早晚各一筆）是否已排程（idempotent）
   useEffect(() => {
     ensureAnticoagulantReminder();
     ensureAnticoagulantEveningReminder();
   }, [activeOwner?.id]);
+
+  // 牛肉精中午提醒：今天已經勾選過就取消當天排程（不用再提醒），還沒勾選
+  // 就確保已排程（idempotent）。這裡讀自己的 checked（不是 viewer 模式的
+  // activeChecked），因為通知排程只作用在自己這台裝置上——查看別人的資料
+  // 不該去動自己裝置上牛肉精提醒的排程狀態。
+  useEffect(() => {
+    if (isViewerMode) return;
+    if (checked[BEEF_ESSENCE]) {
+      cancelBeefEssenceReminder();
+    } else {
+      ensureBeefEssenceReminder();
+    }
+  }, [isViewerMode, checked[BEEF_ESSENCE], activeOwner?.id]);
 
   // ── Actions ──────────────────────────────────────────────────────────────
   async function loadHistoryData() {
@@ -163,8 +191,7 @@ export default function DailyMedScreen() {
           console.warn('[DailyMedScreen] 讀取歷史用藥紀錄失敗，該天顯示為空:', e.message);
         }
       } else {
-        const data = await loadDailyMed(dateKey);
-        dayChecked = data.checked || {};
+        dayChecked = await fetchDailyMedWithFallback(dateKey);
       }
       result.push({ dateKey, checked: dayChecked });
     }

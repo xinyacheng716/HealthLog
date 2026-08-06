@@ -1,7 +1,12 @@
-import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import { View, Text, StyleSheet, Platform, ScrollView, TouchableOpacity, AppState } from 'react-native';
 import * as Notifications from 'expo-notifications';
-import { requestNotificationPermission, ensureAnticoagulantReminder, ensureAnticoagulantEveningReminder } from './src/lib/notifications';
+import {
+  requestNotificationPermission,
+  ensureAnticoagulantReminder,
+  ensureAnticoagulantEveningReminder,
+  ensureNailClipReminder,
+} from './src/lib/notifications';
 import { NavigationContainer } from '@react-navigation/native';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -157,15 +162,35 @@ function makeScreen(Screen, tabIdx) {
 function AppContent() {
   const { session, isLoading } = useAuth();
 
-  // 登入後請求通知授權，並確保抗凝血每日提醒（早晚各一筆）已排程
+  // 登入後請求通知授權，並確保抗凝血每日提醒（早晚各一筆）+ 剪指甲提醒
+  // （10.5 天週期）已排程
   useEffect(() => {
     if (!session) return;
     requestNotificationPermission().then((granted) => {
       if (granted) {
         ensureAnticoagulantReminder();
         ensureAnticoagulantEveningReminder();
+        ensureNailClipReminder();
       }
     });
+  }, [session?.user?.id]);
+
+  // 剪指甲提醒是一次性 DATE 觸發器（不像抗凝血劑用 DAILY 反覆觸發），每次
+  // 觸發後都要往後推算下一次時間、重新排程一次——所以除了上面登入／冷啟動
+  // 檢查一次，App 從背景回到前景也要重新檢查一次目前排定的時間是否已經
+  // 過期、該往後推了。這裡放在 App 根層級（不掛在任何 tab screen 底下），
+  // 因為 bottom tab 預設 lazy mount，只有實際切到那個 tab 才會掛載，這則
+  // 提醒跟「目前在看哪個 tab／哪個人的資料」無關，不能只依賴某個特定畫面
+  // 有沒有被打開過。比照 DailyMedScreen 的 AppState 前景刷新模式。
+  const appStateRef = useRef(AppState.currentState);
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (nextAppState) => {
+      const cameToForeground = appStateRef.current !== 'active' && nextAppState === 'active';
+      appStateRef.current = nextAppState;
+      if (!cameToForeground || !session) return;
+      ensureNailClipReminder();
+    });
+    return () => subscription.remove();
   }, [session?.user?.id]);
 
   if (isLoading) {

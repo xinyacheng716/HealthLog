@@ -1,10 +1,13 @@
 // 預設清單版本。每次調整下方任一預設清單就 +1，
 // app 啟動時會對版本較舊的 AsyncStorage 設定做遷移（精準移除 + 補上新預設）。
-export const SETTINGS_VERSION = 2;
+export const SETTINGS_VERSION = 3;
 
 // 遷移時要從既有清單中移除的項目（不分清單，比對字串）。
 // 注意：只移除這些指定項目，使用者自行新增的其他項目會保留。
 export const REMOVED_ITEMS = ['Anzyme', '腳部疼痛', '椎體外症候群'];
+
+// v3：新增「牛肉精」，遷移時補到藥物清單最前面（見 storage/index.js loadSettings）。
+export const BEEF_ESSENCE = '牛肉精';
 
 export const SYMPTOMS_DEFAULT = [
   '胸痛', '肋骨疼痛', '關節疼痛／髖部疼痛', '脊椎僵硬',
@@ -13,6 +16,7 @@ export const SYMPTOMS_DEFAULT = [
 ];
 
 export const MEDS_DEFAULT = [
+  BEEF_ESSENCE,
   '泰格莎 Tagrisso', '嗎啡貼布', '嗎啡緩釋錠',
   '希樂葆 Celebrex', '法莫替丁 Famotidine', '克利生 Clexane',
   '心律整 Propranolol', '戀多眠 Lendormin', '立福全 Rivotril',

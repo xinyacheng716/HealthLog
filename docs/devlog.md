@@ -5,6 +5,14 @@
 > App 名稱：健康記錄 / Health Log
 > Bundle ID：`com.sophiechenggg.healthlog`
 
+> **2026/08 核對更正說明**：這份文件是歷史開發日誌，記錄「每個 build 做了什麼、遇到什麼
+> 事故」，這種歷史敘事沒辦法單靠讀現在的程式碼重建，也不應該因為現在程式碼長得不一樣就
+> 刪掉——Build 2 到 Build 32 的所有事件敘述維持原文，未經改動。本次只針對文件裡「這個機制
+> 現在還存在／現在的架構是這樣」這類**對現況的描述**，逐一對照實際程式碼核對，對不上的地方
+> 用（2026/08 核對更正）標註更正，不影響歷史敘事本身。`git --no-pager log --oneline --all`
+> 只有 7 個 commit，資訊量遠不足以逐版核實這份日誌的細節，本次核對主要依據「現在的程式碼
+> 有沒有這個東西」，查不到就標註為現況已不同，不代表否定歷史上曾經存在過。
+
 ---
 
 ## 版本總覽
@@ -30,10 +38,13 @@
 | 27 | Jul 11–12 | Production（**本機打包 + 手動簽章**）| 白屏修復：本機打包 Build 23 邏輯（不含行事曆改版），置換進乾淨殼子重新簽章送出，繞開 `eas build`，見 C-009／C-010 |
 | 30 | Jul 12 | Production（**本機打包 + 手動簽章**）| 加回行事曆 UI 改版（本機打包含新功能 JS，同樣置換流程），**目前爸媽裝置上實際執行版本** |
 | 31 | Jul 12 | Production（**實測失敗**）| 每日用藥前景刷新同步第一版，只監聽 AppState 轉場事件，冷啟動情境下從未被觸發，實機測試無效，見 Build 32 |
-| 32 | Jul 12–18 | Production（**本機驗證通過，App Store 送出中**）| 補上 useFocusEffect 涵蓋冷啟動 + 修正拉到資料未同步更新畫面的問題，本機驗證通過，等候 TestFlight |
+| 32 | Jul 12–18 | Production（**本機打包 + 手動簽章**）| 補上 useFocusEffect 涵蓋冷啟動 + 修正拉到資料未同步更新畫面的問題，本機驗證通過 |
+| 33 | Jul 18–21 | Production（**本機打包 + 手動簽章**）| 前景刷新同步 pattern 延伸到 `appointments`（含 `note` 欄位），修正 `fetchOwnerAppointments` 真實錯誤時應 throw 而非靜默回傳空陣列 |
+| 35 | ~Jul 21 | Production（**本機打包 + 手動簽章，目前爸媽裝置上實際執行版本**）| 貼布提醒間隔改為 36 小時；每日用藥 7 天歷史 Modal 加入 cloud pull 機制（`fetchDailyMedWithFallback`）；嗎啡貼布 DATE-trigger 通知路徑透過暫時測試按鈕實機確認正常發送 |
 
 > Build 11–13 為 Development Build（用於測試，不在 TestFlight 列表中）
-> Build 25–26、28–29：目前無對應的詳細紀錄，如之後要補上請提供內容再插入。
+> Build 25–26、28–29、34：目前無對應的詳細紀錄，如之後要補上請提供內容再插入。
+> Build 33、35 為概略記錄（依討論過程回填，非逐項核對過的完整記錄），細節如有出入以 Xinya 記憶或 git log 為準。
 
 ---
 
@@ -351,7 +362,7 @@ unzip -q "$HOME/Downloads/HealthApp Builds/02乾淨打包外殼/new_build.ipa" -
 ls sync_test_extracted/Payload/   # 應該看到 app.app
 ```
 
-**Step 4 — 換檔案、改版本號、重新簽章**（送出前務必去 App Store Connect → TestFlight 核對目前最高 build number，版本號要比它更高，這裡假設是 32）
+**Step 4 — 換檔案、改版本號、重新簽章**（送出前務必去 App Store Connect → TestFlight 核對目前最高 build number，版本號要比它更高，目前最高是 37，這裡假設下一版是 38）
 ```bash
 cd ~/Downloads
 
@@ -362,7 +373,7 @@ cp -R /tmp/new_bundle_assets sync_test_extracted/Payload/app.app/assets
 cp ~/Downloads/Projects/HealthAppFresh/credentials/ios/profile.mobileprovision \
   sync_test_extracted/Payload/app.app/embedded.mobileprovision
 
-/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 32" sync_test_extracted/Payload/app.app/Info.plist
+/usr/libexec/PlistBuddy -c "Set :CFBundleVersion 38" sync_test_extracted/Payload/app.app/Info.plist
 
 xattr -cr sync_test_extracted/Payload/app.app
 find sync_test_extracted/Payload/app.app -name ".DS_Store" -delete
@@ -386,11 +397,11 @@ codesign --verify --deep --strict --verbose=4 sync_test_extracted/Payload/app.ap
 **Step 5 — 打包、送出到「已送出版本」歸檔**（`eas submit` 本身沒問題，只有 `eas build` 有問題，所以 submit 階段維持不變）
 ```bash
 cd ~/Downloads/sync_test_extracted
-zip -qry "$HOME/Downloads/HealthApp Builds/03已送出版本/sync_test_v32.ipa" Payload
+zip -qry "$HOME/Downloads/HealthApp Builds/03已送出版本/sync_test_v38.ipa" Payload
 
 cd ~/Downloads/Projects/HealthAppFresh
 eas submit --platform ios --path \
-  "$HOME/Downloads/HealthApp Builds/03已送出版本/sync_test_v32.ipa"
+  "$HOME/Downloads/HealthApp Builds/03已送出版本/sync_test_v38.ipa"
 
 cd ~/Downloads
 rm -rf sync_test_extracted   # 送出成功後工作資料夾可以直接刪，成品已經在「03已送出版本」了
@@ -434,7 +445,7 @@ App 從最初設計開始就只有「本機 → 雲端」的單向 push，從未
 
 **保護措施**：寫入 AsyncStorage（`saveDailyMedLocalOnly`）不論日期是否仍是使用者當下瀏覽的日期都會執行——落地寫本機快取本身沒有副作用；但更新畫面顯示（`setChecked`）**只有**日期仍對得上使用者當下的 `activeDate` 才會覆蓋，避免非同步拉取回來時使用者已經手動切到別的日期，卻被舊的拉取結果蓋掉畫面。
 
-**除錯機制（暫時性，之後移除）**：「今日用藥」子分頁最上方加了一行小字 `syncDebugInfo`，顯示「上次同步時間／觸發來源（AppState 或 focus）／結果（成功／查無資料／錯誤訊息）」，只在 Owner 模式顯示，用來在正式環境（Console.app 看不到 production 的 `console.log`）肉眼確認同步邏輯有沒有跑、跑到什麼結果，不用再靠猜。
+**除錯機制（暫時性，之後移除）**：「今日用藥」子分頁最上方加了一行小字 `syncDebugInfo`，顯示「上次同步時間／觸發來源（AppState 或 focus）／結果（成功／查無資料／錯誤訊息）」，只在 Owner 模式顯示，用來在正式環境（Console.app 看不到 production 的 `console.log`）肉眼確認同步邏輯有沒有跑、跑到什麼結果，不用再靠猜。**（2026/08 更新：已確認同步邏輯沒問題，`syncDebugInfo` 這段除錯文字已移除，見下方新增章節。）**
 
 **打包送出流程**：沿用 Build 27 建立的本機打包 + 手動簽章流程（完整指令見 Build 27），版號設為 32。
 
@@ -442,7 +453,91 @@ App 從最初設計開始就只有「本機 → 雲端」的單向 push，從未
 
 ---
 
+### 下一輪修改｜2026/08（尚未打包送出，等候下次本機打包流程）
+
+**同步（Layer 1）**
+- `syncDebugInfo` 除錯文字確認移除（`CalendarScreen.js`；文件先前誤植成 `DailyMedScreen.js`，已一併修正，見上方 CLAUDE.md）
+- `consult_memos`（問診備忘）補上前景刷新拉取同步，跟 `daily_med_checks` / `appointments` 對稱：
+  - `saveConsultMemoLocalOnly(date, text)`（`storage/index.js`）：純寫本機，不觸發雲端推送
+  - `refreshConsultMemoFromCloud(dateAtCallTime)`（`ConsultationMemo.js` 元件內，非 `cloudSync.js`——若放 `cloudSync.js` 會跟 `storage/index.js` 的既有 import 方向形成循環 import，因此改放元件層，這跟 daily-med／appointments 既有慣例一致）：`fetchOwnerConsultMemo` 拉資料 → 寫本機 → 更新畫面
+  - 雙重防呆：`dateRef`（使用者是否還停留在同一天，避免非同步拉取結果蓋掉使用者已切換到的日期）+ `focusedRef`（使用者是否正在輸入中，避免拉取結果蓋掉還在 600ms autosave debounce 內、尚未推上雲端的最新按鍵內容）
+  - `useFocusEffect` + `AppState` 雙觸發，僅 Owner 模式（檢視者模式本來就即時讀雲端，不需要這層）
+
+**問診備忘 UX**
+- 移除「清空」按鈕（含 `handleClear` handler、對應樣式），避免手滑誤刪整篇備忘；「儲存」按鈕不受影響
+- 修正「點卡片空白處也會跳鍵盤」：`TextInput` 原本固定 `minHeight: 132` 撐滿卡片，改成用 `onContentSizeChange` 依內容高度自動調整，卡片裡文字以外的留白區域不再掛觸控事件
+- 新增「＋ 新增一項」列，取代原本「點空白處新增」的隱性互動，點下去才 append 換行並 focus；移除舊的重複用途「＋ 條目」header 按鈕
+
+**新功能：剪指甲提醒**
+- 獨立通知，跟每日用藥勾選清單無關（不進 `defaults.js` / 不出現在任何勾選畫面）
+- `src/lib/notifications.js` 新增 `ensureNailClipReminder()` + `scheduleNailClipReminderAt()`：10.5 天週期，固定 22:00（GMT+8），`date` 觸發器 + 冪等 identifier `reminder_nail_clip`；過期後往後遞推到真正落在未來的下一個時段，避免長時間沒開 App 導致新排程時間點仍落在過去被 iOS 靜默丟棄（沿用嗎啡貼布排查時得到的教訓）
+- 掛載在 `App.js` 根層（`AppContent`），冷啟動 + `AppState` 回前景都觸發檢查
+- `SettingsScreen.js` 的既有 `__DEV__` 專用除錯區塊底下加了一個暫時測試按鈕（30 秒後觸發），驗證完應移除或保留在 `__DEV__` 區塊內（不會進到正式版）
+
+**行事曆分頁調整**
+- 子分頁從三個（月曆行程／所有行程／今日用藥，舊版）精簡為兩個：**新增行程／所有行程**
+- 預設開啟頁改為「所有行程」（原預設「新增行程」，爸爸反映找不到既有行程列表）
+- 兩個分頁標籤文字加粗，選中/未選中狀態皆套用
+
+**（2026/08 更新：以下「⚠️ 待確認」已核實解答）** 舊版「今日用藥」勾選清單（含刪除線、進度條）
+目前的位置：**獨立的 Tab 3「每日用藥」，檔案是 `src/screens/DailyMedScreen.js`**——不在
+`CalendarScreen.js` 底下，沒有被移除也沒有併入其他畫面，只是既有文件（`CLAUDE.md`／
+`spec.md`）長期漏列這個檔案，才誤以為它消失了。詳見 2026/08 全面核對版 `docs/CLAUDE.md`。
+
+**設定六個清單前景刷新同步（Layer 1 第 4 項資料類型，2026/08）**
+- 對稱於 `daily_med_checks` / `appointments` / `consult_memos` 的既有 pattern，但實作位置
+  不是複用「Build 21 就存在的 `refreshSettingsFromCloud`」——那支函式已經不存在於目前的
+  `useSettings.js`／`initSync.js`（推測與下方「架構現況盤點」提到的 Build 23 rollback 有關，
+  但無法完全確認），所以是在目前的 `useSettings.js` 裡重新加上同名的新函式，邏輯不是複用舊的
+- 新增 `hydratedRef`（`useRef`，非 state，不驅動任何畫面切換）：擋前景刷新跟既有的首次
+  hydration 邏輯搶跑
+- `refreshSettingsFromCloud()`：拉六個清單，逐欄比對跟本機 ref 是否相同，只更新真的不同的
+  欄位，寫入路徑跟既有的 `applyToState()` 一樣是純本機（`setXListRaw` + `saveSettings()`），
+  不呼叫六個公開 setter（會觸發 `syncListFieldToCloud` 反推雲端）
+- 觸發點：hydration 完成後，若這次是「信任本機、跳過首次雲端拉取」的分支就補打一次；另外在
+  `useSettings.js` 內部掛 `AppState` 前景轉換監聽——沒有放在 `App.js` 或個別畫面，因為
+  `useSettings()` 全 App 只會被 `AppProviders` 呼叫一次，效果上已經是全域層級，涵蓋
+  `RecordScreen`／`LogCard`／`AppointmentSection`／`SettingsScreen` 等所有消費這六個清單的畫面
+- **順手修正 `fetchOwnerSettings`（`viewerData.js`）的一個既有風險**：原本三層 fallback 全部
+  失敗時會靜默回傳「六個清單全部是空陣列」，跟「使用者真的清空了六個清單」無法區分——這對
+  舊的一次性 hydration（只在全新裝置上跑）沒有實際影響，但對「已經有本機資料的裝置」跑前景
+  刷新來說，會讓一次網路失敗變成把本機正確資料覆蓋成空的。已改成該分支改為 `throw`，並同步
+  補上三個呼叫端（`SettingsScreen.js`、`ViewerContext.js` 兩處）的 `.catch()`，失敗時保留原有
+  畫面狀態，不覆蓋
+
+**架構現況盤點（2026/08）**
+`docs/CLAUDE.md`、`docs/spec.md` 累積了不少跟實際程式碼對不上的落差（部分是 Claude.ai 在
+沒有程式碼讀取權限的情況下維護造成的）。逐一讀過 `src/` 全部檔案後全面重寫兩份文件，較大的
+落差包含：Tab 數量搞混（每日用藥其實是獨立 Tab 3，不是設定的 Tab 3、也沒併入行事曆）、
+設定頁六個清單長期只被記成三個、`syncMedListToCloud` 這個函式名稱不存在（實際是
+`syncListFieldToCloud`）、`syncQueue.js`／`isSettingsHydrated`／`hasHydratedFromCloudRef`
+在目前程式碼裡都不存在（見下方新增章節）、嚴重度 Slider 目前沒有對應 UI。完整差異見
+2026/08 版 `docs/CLAUDE.md` 與 `docs/spec.md`，這裡不重複列出全部項目。`git --no-pager log
+--oneline --all` 只有 7 個 commit，跟這份 devlog 記錄的 Build 2 到 35+ 逐版細節既對不上也
+查不出矛盾，無法用來佐證或否證任何一筆歷史紀錄，本輪只更正「對現況的描述」，Build 2 到 32
+的歷史事件敘述維持原文不動。
+
+**驗證狀態**：以上除了剪指甲的排程遞推邏輯，其餘皆已 dev client 驗證 UI/邏輯正確；同步類
+（consult_memos、設定六個清單 pull sync）與剪指甲的冷啟動排程邏輯仍需比照過去慣例，走一次
+本機打包 + 手動簽章 + 實機測試才算數驗證，不能只靠 dev client 或程式碼審查判斷。
+
+---
+
 ## 功能地圖（截至 Build 32）
+
+> **（2026/08 核對更正）** 這份地圖是 Build 32 當下的快照，維持原文不動，但下列幾點截至
+> 2026/08 已經不是現況，讀取時請一併對照 2026/08 版 `docs/CLAUDE.md`：
+> - 「Tab 2 — 每日用藥」底下列的「月曆行程／所有行程」子分頁，現在是獨立的 Tab 2「行事曆」
+>   （`CalendarScreen.js`，子分頁精簡為「新增行程／所有行程」兩個）；「今日用藥」現在是
+>   獨立的 Tab 3（`DailyMedScreen.js`），不再是同一個 Tab 底下的子分頁
+> - 「資料完整性保護」列的 `hasHydratedFromCloudRef guard` 與 `syncQueue.js`，目前程式碼裡
+>   都不存在（`useSettings.js`／`App.js` 沒有任何畫面等待雲端確認的 gate，也搜尋不到
+>   `enqueuePendingSync`／`flushPendingSyncQueue`）。推測與下方「Rollback to Build 23 logic
+>   in source」那次 commit 有關（提交訊息本身也註明「unverified」），但無法完全確認這就是
+>   唯一原因
+> - 「推播通知」只列了抗凝血劑與嗎啡貼布兩項，目前還有牛肉精（`DAILY`，每天 12:00）與
+>   剪指甲提醒（`DATE`，10.5 天週期）
+> - 「Tab 3 — 設定」的六個清單／家人分享／登出仍準確，但現在是 Tab 4，不是 Tab 3
 
 ```
 健康記錄 App
@@ -634,10 +729,11 @@ App 從最初設計開始就只有「本機 → 雲端」的單向 push，從未
 實務上，因為主要使用情境是「爸爸一天內在單一裝置上操作為主，不同裝置間有數小時到一天的間隔」，選擇先做風險較低、實作量較小的「前景刷新」（Layer 1），Realtime 雙向即時同步（Layer 2）留待後續，避免像 C-005～C-008 那樣一次疊太多功能難以排查。
 
 **Layer 1（前景刷新）分層推進進度**：
-1. **每日用藥（daily_med_checks）**——✅ 邏輯已完成並修正兩輪問題（Build 31 冷啟動未觸發 → Build 32 補 useFocusEffect + 修正畫面未同步更新），**本機驗證通過**，Build 32 已送出等候 TestFlight
-2. **行程（appointments）**——下一項，尚未開始
-3. **設定頁六個清單**——尚未開始；此項較複雜，因為已有既有的 hydrate 邏輯（`refreshSettingsFromCloud`，從 Build 21 就存在，見 C-007 的 hydration 嚴格序列），前景刷新的時機點要接到既有邏輯上，不是重新寫一套，動手前需先確認能否直接複用
-4. **其他資料類型（症狀紀錄、病歷、問診備忘）**——比照辦理，尚未開始
+1. **每日用藥（daily_med_checks）**——✅ 完成（Build 31 冷啟動未觸發 → Build 32 補 useFocusEffect + 修正畫面未同步更新），**本機驗證通過**
+2. **行程（appointments）**——✅ 完成（Build 33，含 `note` 欄位）
+3. **問診備忘（consult_memos）**——✅ 完成（2026/08，見上方「下一輪修改」章節，額外加了 `focusedRef` 防呆避免拉取蓋掉使用者正在輸入中的內容），**尚未打包送出、待實機驗證**
+4. **設定頁六個清單**——✅ 完成（2026/08，見上方「下一輪修改」章節），**尚未打包送出、待實機驗證**。原本評估要複用「Build 21 就存在的既有 hydrate 邏輯」，但實際動手時發現那支舊版 `refreshSettingsFromCloud`（連同 C-007 描述的 `hasHydratedFromCloudRef`／`isSettingsHydrated`）已經不存在於目前程式碼，因此是在目前的 `useSettings.js` 裡重新實作同名函式，不是複用舊邏輯
+5. **其他資料類型（症狀紀錄、病歷）**——尚未開始
 
 ### `defaults.js` 內含真實個人健康資訊
 

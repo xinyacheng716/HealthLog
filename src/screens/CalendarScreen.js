@@ -37,7 +37,9 @@ export default function CalendarScreen() {
   const insets = useSafeAreaInsets();
   const today = todayKey();
 
-  const [mode, setMode] = useState('calendar');
+  // 預設開啟「所有行程」而不是「新增行程」——大多數時候是要查看既有行程，
+  // 不是要新增（爸爸反映一直找不到「所有行程」在哪）。
+  const [mode, setMode] = useState('schedule');
   const [calendarDate, setCalendarDate] = useState(today);
   const [isDrilled, setIsDrilled] = useState(false);
   const [filterType, setFilterType] = useState('');
@@ -59,18 +61,12 @@ export default function CalendarScreen() {
     loadAppointments().then(setAppointments);
   }, []);
 
-  // TEMP DEBUG：暫時拿來在畫面上確認前景刷新有沒有真的觸發、什麼時候觸發，
-  // 穩定後要整段移除。
-  const [syncDebugInfo, setSyncDebugInfo] = useState(null);
-
   // Owner 模式：重新從雲端拉取所有行程，直接更新畫面 state（不是只寫本機、
   // 等下次掛載被動撿到）。AppState 前景轉換、畫面 focus 兩個觸發來源共用
   // 這支函式，比照 daily med（Build 31/32）的做法。
-  async function refreshAppointmentsFromCloud(source) {
+  async function refreshAppointmentsFromCloud() {
     const ownerId = session?.user?.id;
     if (!ownerId) return;
-    const ts = new Date().toLocaleTimeString('zh-TW', { hour12: false });
-    setSyncDebugInfo(`[${source}] ${ts} 拉取中…`); // TEMP DEBUG
     try {
       const cloudAppointments = await fetchOwnerAppointments(ownerId);
       await saveAppointmentsLocalOnly(cloudAppointments);
@@ -78,17 +74,15 @@ export default function CalendarScreen() {
       // 成功，這時剛好觸發這支函式，會用還沒包含那筆新行程的雲端舊清單
       // 覆蓋掉本機剛新增的那筆，導致畫面上短暫消失。
       setAppointments(cloudAppointments);
-      setSyncDebugInfo(`[${source}] ${ts} 完成，共 ${cloudAppointments.length} 筆`); // TEMP DEBUG
     } catch (e) {
       console.warn('[CalendarScreen] 重新拉取行程失敗，保留本機狀態:', e.message);
-      setSyncDebugInfo(`[${source}] ${ts} 失敗：${e.message}`); // TEMP DEBUG
     }
   }
 
   // Owner 模式：畫面每次取得 focus（含第一次掛載／冷啟動）都重新拉取一次。
   useFocusEffect(useCallback(() => {
     if (isViewerMode) return;
-    refreshAppointmentsFromCloud('focus');
+    refreshAppointmentsFromCloud();
   }, [isViewerMode, session?.user?.id]));
 
   // Owner 模式：App 從背景切回前景時，同樣重新拉取一次，避免多裝置間
@@ -101,7 +95,7 @@ export default function CalendarScreen() {
       const cameToForeground = appStateRef.current !== 'active' && nextAppState === 'active';
       appStateRef.current = nextAppState;
       if (!cameToForeground) return;
-      refreshAppointmentsFromCloud('AppState');
+      refreshAppointmentsFromCloud();
     });
 
     return () => subscription.remove();
@@ -180,9 +174,6 @@ export default function CalendarScreen() {
 
   const ModeBar = (
     <>
-      {!isViewerMode && syncDebugInfo && (
-        <Text style={styles.syncDebugText}>{syncDebugInfo}</Text>
-      )}
       <View style={styles.modeBar}>
       {TABS_DEF.map((t, i) => (
         <React.Fragment key={t.key}>
@@ -493,16 +484,6 @@ const styles = StyleSheet.create({
   scroll: { flex: 1 },
   content: { padding: 16, gap: 14 },
 
-  // TEMP DEBUG
-  syncDebugText: {
-    fontSize: 10,
-    color: colors.textMuted,
-    backgroundColor: colors.bgSection,
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    textAlign: 'center',
-  },
-
   // 2-tab mode bar
   modeBar: {
     flexDirection: 'row',
@@ -519,7 +500,7 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.cinnabar,
     backgroundColor: colors.bgCard,
   },
-  modeTabText: { fontSize: 12, color: colors.textMuted, letterSpacing: 1.5 },
+  modeTabText: { fontSize: 12, color: colors.textMuted, letterSpacing: 1.5, fontWeight: '700' },
   modeTabTextActive: { color: colors.cinnabar },
   modeDivider: { width: 1, backgroundColor: colors.borderLight, marginVertical: 8 },
 

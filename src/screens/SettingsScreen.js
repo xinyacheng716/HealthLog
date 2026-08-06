@@ -97,7 +97,11 @@ export default function SettingsScreen() {
   const [ownerSettings, setOwnerSettings] = useState(null);
   useEffect(() => {
     if (!isViewerMode || !activeOwner) { setOwnerSettings(null); return; }
-    fetchOwnerSettings(activeOwner.id).then(setOwnerSettings);
+    fetchOwnerSettings(activeOwner.id)
+      .then(setOwnerSettings)
+      .catch((e) => {
+        console.warn('[SettingsScreen] 讀取檢視者設定失敗，保留原有畫面狀態:', e.message);
+      });
   }, [isViewerMode, activeOwner?.id]);
 
   // In viewer mode: show owner's lists (empty if null/unsynced, NOT viewer's defaults)

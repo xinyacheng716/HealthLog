@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { v4 as uuidv4 } from 'uuid';
 import {
-  SYMPTOMS_DEFAULT, MEDS_DEFAULT, ALLERGY_DEFAULT, SETTINGS_VERSION, REMOVED_ITEMS,
+  SYMPTOMS_DEFAULT, MEDS_DEFAULT, ALLERGY_DEFAULT, SETTINGS_VERSION, REMOVED_ITEMS, BEEF_ESSENCE,
   MEDICAL_HISTORY_DEFAULT, HOSPITAL_DEFAULT, VISIT_TYPE_DEFAULT, DOCTOR_DEFAULT,
 } from '../constants/defaults';
 import {
@@ -9,6 +9,7 @@ import {
   pushDailyMedCheckToCloud,
   pushAppointmentToCloud,
   pushConsultMemoToCloud,
+  syncListFieldToCloud,
 } from '../lib/cloudSync';
 
 const KEYS = {
@@ -72,6 +73,13 @@ export async function loadSettings() {
       symptomList = pruneRemoved(symptomList);
       medList     = pruneRemoved(medList);
       allergyList = pruneRemoved(allergyList);
+
+      // v3：補上「牛肉精」到藥物清單最前面。跟 pruneRemoved 一樣受版本號
+      // 嚴格把關，只在遷移當下跑一次——不是每次讀取都比對預設值補值（那正是
+      // C-005 mergeNew 的問題），所以使用者遷移後若自行刪除牛肉精，不會被復活。
+      if (!medList.includes(BEEF_ESSENCE)) {
+        medList = [BEEF_ESSENCE, ...medList];
+      }
     }
 
     symptomList  = withOtherLast(symptomList);
@@ -82,6 +90,9 @@ export async function loadSettings() {
     // 預設項目自動復活、還永久寫回 AsyncStorage）的來源。
     if (migrating) {
       await saveSettings({ symptomList, medList, allergyList, hospitalList, visitTypeList, doctorList });
+      // 遷移只落地本機——雲端 med_list 也要補上，否則檢視者（家人）從
+      // Supabase 讀到的藥物清單不會有牛肉精，見 syncListFieldToCloud（C-006）。
+      syncListFieldToCloud('med_list', medList);
     }
 
     return {
@@ -213,6 +224,18 @@ export async function saveConsultMemo(date, text) {
       await AsyncStorage.removeItem(`consultMemo_${date}`);
     }
     pushConsultMemoToCloud(date, text);
+  } catch {}
+}
+
+// 只寫本機、不推雲端——給「剛從雲端拉回資料、要落地存本機」的情境用，
+// 避免拉下來又立刻推回去的空轉請求。
+export async function saveConsultMemoLocalOnly(date, text) {
+  try {
+    if (text) {
+      await AsyncStorage.setItem(`consultMemo_${date}`, text);
+    } else {
+      await AsyncStorage.removeItem(`consultMemo_${date}`);
+    }
   } catch {}
 }
 

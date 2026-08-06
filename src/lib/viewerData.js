@@ -184,12 +184,13 @@ export async function fetchOwnerSettings(ownerId) {
     .eq('id', ownerId)
     .single();
 
+  // 三層 fallback 都失敗，代表這次真的沒有查到任何東西（RLS、連線等查詢層級
+  // 錯誤），要往外拋——不能跟「這個欄位本來就是空陣列」用同一個 [] 混在一起，
+  // 否則呼叫端（尤其是前景刷新）無法分辨查詢是否失敗，會把「查詢失敗」誤判成
+  // 「使用者真的清空了六個清單」，拿去覆蓋畫面/本機的正確資料。
   if (e2 || !d2) {
     console.warn('[viewerData] fetchOwnerSettings fallback:', e2?.message);
-    return {
-      medList: [], symptomList: [], allergyList: [],
-      hospitalList: [], visitTypeList: [], doctorList: [],
-    };
+    throw new Error(e2?.message || 'fetchOwnerSettings: no profile row found');
   }
   return {
     medList: Array.isArray(d2.med_list) ? d2.med_list : [],

@@ -1,4 +1,10 @@
-# 健康記錄 App — 完整規格書（2026/07 更新版）
+# 健康記錄 App — 完整規格書（2026/08 全面核對版）
+
+> 本次全面重寫：直接讀取實際程式碼庫作為唯一權威來源，反映**目前實際上線的行為**，
+> 不是最初設計時的規格。原規格書中已經不存在於程式碼裡的功能（例如「嚴重程度 Slider」、
+> 「每日用藥 Tab 底下的月曆行程／所有行程子分頁」）一律以現況為準，不保留舊規格內容。
+> 架構層面的說明（技術棧、資料模型、雲端同步邏輯）與 `docs/CLAUDE.md` 重複的地方，此處
+> 只列與畫面規格直接相關的摘要，完整版見 `docs/CLAUDE.md`。
 
 ## 1. 專案概覽
 
@@ -16,30 +22,14 @@
 
 ---
 
-## 2. 技術規格
+## 2. 技術規格摘要
 
-### 技術棧
-
-| 項目 | 版本 / 套件 |
-|------|-----------|
-| Framework | React Native + **Expo SDK 54**（`expo: ~54.0.0`）|
-| Navigation | `@react-navigation/native` ^7.0.0 + `@react-navigation/bottom-tabs` ^7.2.0 |
-| 本機 Storage | `@react-native-async-storage/async-storage` 2.2.0 |
-| 雲端後端 | Supabase（`https://npizltqgwfcrldmzsyyx.supabase.co`）|
-| 認證 | Apple Sign In（`expo-apple-authentication` + `signInWithIdToken`）|
-| UUID | `uuid` ^14.0.0 + `react-native-get-random-values` ~1.11.0 |
-| 動畫 | `react-native-reanimated` ~4.1.1 |
-| 漸層 | `expo-linear-gradient` ~15.0.8 |
-| Slider | `@react-native-community/slider` 5.0.1 |
-| Picker | `@react-native-picker/picker` 2.11.1 |
-| DateTimePicker | `@react-native-community/datetimepicker` 8.4.4 |
-| 目標平台 | iOS（TestFlight 內部測試）|
-| Bundle ID | `com.sophiechenggg.healthlog` |
-| Expo Project ID | `1d365195-d613-44a9-a742-77a94055c6f9` |
-| Team ID | `Q3AB8UHDUY` |
-| 正式版本部署 | **本機打包 + 手動簽章**（2026/07/11 起，`eas build` 停用於正式版本，見 9-5、8-2）|
-
-> 查閱 Expo API 時使用 https://docs.expo.dev/versions/v54.0.0/
+完整版本號、依賴清單見 `docs/CLAUDE.md`「技術棧」。重點：
+- React Native `0.81.5` + Expo `~54.0.0`，Bundle ID `com.sophiechenggg.healthlog`
+- Supabase 為雲端後端，Apple Sign In 為唯一登入方式
+- 正式版本部署走**本機打包 + 手動簽章**，`eas build` 停用於正式版本（詳見 `docs/CLAUDE.md`「更新與打包流程」）
+- `@react-native-community/slider`、`react-native-reanimated`、`react-native-gesture-handler`
+  已安裝但目前程式碼沒有實際使用
 
 ### 環境設定
 ```
@@ -50,184 +40,45 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=<publishable key>
 
 ---
 
-## 3. 資料架構
+## 3. 資料架構摘要
 
-### 3-1. 本機 AsyncStorage
+完整 AsyncStorage key／Supabase 資料表欄位／camelCase↔snake_case 對應表見
+`docs/CLAUDE.md`「資料模型」，此處不重複列出。與畫面規格直接相關的重點：
 
-```ts
-// SymptomLog（key: "logs"）
-{
-  id: string               // uuid v4
-  symptoms: string[]       // 多選症狀陣列（主格式）
-  symptom?: string         // 舊格式兼容（單一字串）
-  severity: number         // 1–10
-  startTime: string        // "YYYY/MM/DD HH:MM"
-  selfMeds: string[]       // 自行服藥陣列（主格式）
-  selfMed?: string         // 舊格式兼容
-  note: string | null
-  endTime: string | null
-  doctorDiagnosis: string | null
-  doctorMed: string | null
-  reliefSeverity: number | null  // 0–10
-  reliefNote: string | null
-}
+- Settings（本機 `"settings"` key、Supabase `profiles` 表）是**六個**清單：`symptomList` /
+  `medList` / `allergyList` / `hospitalList` / `visitTypeList` / `doctorList`，不是三個
+- `SymptomLog` 有 `severity`（1–10）與 `reliefSeverity`（0–10）兩個數值欄位，但**目前所有
+  畫面都沒有可調整這兩個數值的 UI**——`severity` 送出時固定寫死 `5`；`reliefSeverity` 只在
+  `LogCard.js` 顯示（`log.reliefSeverity !== null` 時渲染文字），沒有找到任何寫入
+  `reliefSeverity` 的互動路徑
+- `Appointment.type` 的完整選項是 `VISIT_TYPE_DEFAULT`：門診／抽血／MRI／CT／**骨掃描**／
+  X光／慢簽／復健／其他（九項，含骨掃描）
 
-// Settings（key: "settings"）
-{
-  symptomList: string[]
-  medList: string[]
-  allergyList: string[]
-  version: number
-}
+### 前景刷新拉取同步（Pull Sync）現況
 
-// DailyMedCheck（key: "dailyMed_YYYY-MM-DD"）
-{
-  date: string             // "YYYY-MM-DD"
-  checked: Record<string, boolean>  // { "藥名": true/false }
-}
+App 從最初設計就只有「本機 → 雲端」的單向 push，沒有「雲端 → 本機」的主動更新機制。裝置 A
+編輯資料並成功推上雲端後，裝置 B（同帳號、App 保持開啟中）不會自動看到更新，除非重新啟動
+App 觸發一次登入時的 hydration（僅限 settings 六個清單以外的資料類型；settings 六個清單連
+「重新啟動 App 就會拉最新版」都不成立，見下方）。
 
-// Appointment（key: "appointments"）
-// Array of:
-{
-  id: string               // uuid v4
-  dateTime: string         // "YYYY/MM/DD HH:MM"
-  hospital: string
-  type: string             // 見行程類型清單
-  doctor: string | null    // 只有 type==='門診' 才有值
-  note: string | null
-}
+正在分資料類型逐步補上「App 前景化時主動拉一次」的機制（`AppState` 前景轉換 + 進入畫面
+`useFocusEffect` 雙觸發，只在 Owner 模式執行）：
 
-// MedicalHistory（key: "medicalHistory"）
-// Array of:
-{
-  year: number
-  records: Array<{
-    id: string
-    month: number          // 1–12
-    text: string
-  }>
-}
+| 資料類型 | 狀態 |
+|---------|------|
+| daily_med_checks（每日用藥）| 完成，本機驗證通過 |
+| appointments（行程）| 完成 |
+| consult_memos（問診備忘）| 完成，尚未打包送出實機驗證 |
+| settings 六個清單 | 完成，尚未打包送出實機驗證 |
+| symptom_logs（症狀紀錄）、medical_history（病歷）| 尚未開始——這兩類資料目前仍是「重開 App
+才會拉最新版」，App 開著期間不會自動更新 |
 
-// ConsultMemo（key: "consultMemo_YYYY-MM-DD"）
-string  // 純文字；內容為空時 removeItem，不存空字串
-
-// Migration flags（各自獨立）
-"cloudMigrationDone"        // logs + dailyMed 初次搬遷
-"appointmentsMigrationDone" // appointments 補遷移
-"medHistoryMigrationDone"   // medical_history 補遷移
-"consultMemoMigrationDone"  // consult_memos 補遷移
-```
-
-### 3-2. Supabase 資料表
-
-```sql
--- 使用者個人資料
-profiles (
-  id uuid PRIMARY KEY,          -- 對應 auth.users.id
-  full_name text,
-  med_list jsonb,               -- 藥物清單（同步自 settings.medList）
-  symptom_list jsonb,           -- 症狀清單
-  allergy_list jsonb,           -- 過敏清單
-  created_at timestamptz
-)
-
--- 症狀紀錄
-symptom_logs (
-  id uuid PRIMARY KEY,
-  owner_id uuid REFERENCES profiles(id),
-  symptom text NOT NULL,        -- symptoms[] join 成「、」分隔字串
-  severity smallint,            -- 1–10
-  start_time timestamptz,
-  self_med text,                -- selfMeds[] join 成「、」分隔字串
-  note text,
-  end_time timestamptz,
-  doctor_diagnosis text,
-  doctor_med text,
-  relief_severity smallint,     -- 0–10
-  relief_note text,
-  created_at timestamptz
-)
-
--- 每日用藥勾選
-daily_med_checks (
-  owner_id uuid REFERENCES profiles(id),
-  check_date date,
-  checked jsonb,                -- Record<string, boolean>
-  PRIMARY KEY (owner_id, check_date)
-)
-
--- 醫院行程
-appointments (
-  id uuid PRIMARY KEY,
-  owner_id uuid REFERENCES profiles(id),
-  appt_time timestamptz,
-  hospital text,
-  type text,
-  doctor text,
-  note text,
-  created_at timestamptz
-)
-
--- 病歷
-medical_history (
-  id uuid PRIMARY KEY,
-  owner_id uuid REFERENCES profiles(id),
-  year smallint,
-  month smallint,               -- 1–12
-  content text,                 -- 對應本機的 text 欄位
-  created_at timestamptz
-)
-
--- 問診備忘
-consult_memos (
-  owner_id uuid REFERENCES profiles(id),
-  memo_date date,
-  content text,
-  updated_at timestamptz,
-  PRIMARY KEY (owner_id, memo_date)
-)
-
--- 家人授權關係
-viewer_access (
-  id uuid PRIMARY KEY,
-  owner_id uuid REFERENCES profiles(id),
-  viewer_id uuid REFERENCES profiles(id),
-  status text,                  -- 'accepted' | 'revoked'
-  created_at timestamptz,
-  UNIQUE (owner_id, viewer_id)
-)
-
--- 邀請碼
-invite_codes (
-  id uuid PRIMARY KEY,
-  owner_id uuid REFERENCES profiles(id),
-  code text UNIQUE,             -- 6碼大寫英數，排除 0/O/1/I
-  expires_at timestamptz,       -- 產生後 48 小時
-  used_by uuid,
-  used_at timestamptz,
-  created_at timestamptz
-)
-```
-
-### 3-3. camelCase ↔ snake_case 對應（cloudSync.js）
-
-| 本機欄位 | Supabase 欄位 | 轉換方式 |
-|---------|--------------|---------|
-| `symptoms[]` | `symptom` | `join('、')` |
-| `selfMeds[]` | `self_med` | `join('、')`，空陣列存 null |
-| `startTime` | `start_time` | `"YYYY/MM/DD HH:MM"` → ISO timestamptz |
-| `endTime` | `end_time` | 同上 |
-| `doctorDiagnosis` | `doctor_diagnosis` | 直接帶值 |
-| `doctorMed` | `doctor_med` | 直接帶值 |
-| `reliefSeverity` | `relief_severity` | 直接帶值 |
-| `reliefNote` | `relief_note` | 直接帶值 |
-| `dateTime`（行程）| `appt_time` | 同 startTime 轉換 |
-| `text`（病歷）| `content` | 直接帶值 |
-| `month`（病歷）| `month` | 直接帶值 |
+完整實作細節（各資料類型對應的 `*LocalOnly()` 寫入函式、拉取函式、掛載位置）見
+`docs/CLAUDE.md`「雲端同步邏輯」。
 
 ---
 
-## 4. 應用程式架構
+## 4. 應用程式架構摘要
 
 ### 4-1. 進入點與 Provider 層級
 
@@ -240,87 +91,30 @@ index.js
 App.js
   SafeAreaProvider
     AuthProvider              ← session / signInWithApple / signOut
-      ViewerProvider          ← viewableOwners / activeOwner / isViewerMode
-        AppProviders          ← SettingsContext + LogsContext + MedicalHistoryContext
+      ViewerProvider          ← viewableOwners / activeOwner / isViewerMode / ownerSettings
+        AppProviders          ← SettingsContext（六個清單）+ LogsContext + MedicalHistoryContext
           AppContent
             isLoading → 黑底 View（避免閃爍）
             !session  → LoginScreen
-            session   → NavigationContainer + Tab.Navigator + IdentitySwitcher
+            session   → NavigationContainer + Tab.Navigator（5 個 Tab）+ IdentitySwitcher
+            （AppContent 這層另外掛了剪指甲提醒的 AppState 監聽，跟畫面顯示邏輯無關）
 ```
+
+**沒有任何「等 settings 六個清單雲端資料確認回來才顯示畫面」的 gate**——舊規格描述的
+`isSettingsHydrated` 機制目前不存在，`useSettings.js` 掛載後立刻用本機資料渲染畫面，雲端
+資料是否需要補值是之後才非同步確認的事。
 
 ### 4-2. Context 清單
 
 | Context | 檔案 | 管理內容 |
 |---------|------|---------|
 | AuthContext | `src/context/AuthContext.js` | session, user, isLoading, signInWithApple, signOut |
-| ViewerContext | `src/context/ViewerContext.js` | viewableOwners, activeOwner, setActiveOwner, isViewerMode |
-| SettingsContext | `src/context.js`（透過 useSettings hook）| symptomList, medList, allergyList + CRUD |
+| ViewerContext | `src/context/ViewerContext.js` | viewableOwners, activeOwner, setActiveOwner, isViewerMode, ownerSettings, refreshOwnerSettings |
+| SettingsContext | `src/context.js`（透過 `useSettings()` hook）| symptomList, medList, allergyList, hospitalList, visitTypeList, doctorList + 六個 setter |
 | LogsContext | `src/context.js` | logs, logsReady, addLog, updateLog, deleteLog |
 | MedicalHistoryContext | `src/context.js` | medicalHistory, medReady + CRUD |
 
-### 4-3. 資料夾結構
-
-```
-HealthAppFresh/
-├── App.js
-├── app.json
-├── babel.config.js          # 含 react-native-reanimated/plugin
-├── index.js
-├── eas.json                 # build profiles: development / preview / production
-├── .env                     # EXPO_PUBLIC_SUPABASE_*（不 commit）
-├── docs/
-│   └── spec.md
-├── src/
-│   ├── constants/
-│   │   ├── colors.js        # 唯一色值來源
-│   │   └── defaults.js      # SYMPTOMS_DEFAULT, MEDS_DEFAULT
-│   ├── storage/
-│   │   └── index.js         # AsyncStorage 封裝 + 觸發雲端同步
-│   ├── lib/
-│   │   ├── supabase.js      # Supabase client
-│   │   ├── cloudSync.js     # 本機 → 雲端（push / delete / migrate）
-│   │   └── viewerData.js    # 雲端 → 本機讀取（fetchOwner*）
-│   ├── hooks/
-│   │   └── useSettings.js
-│   ├── context/
-│   │   ├── AuthContext.js
-│   │   └── ViewerContext.js
-│   ├── context.js
-│   ├── screens/
-│   │   ├── LoginScreen.js
-│   │   ├── RecordScreen.js
-│   │   ├── HistoryScreen.js
-│   │   ├── DailyMedScreen.js
-│   │   └── SettingsScreen.js
-│   └── components/
-│       ├── Section.js
-│       ├── SeverityBadge.js
-│       ├── LogCard.js             # readOnly prop
-│       ├── DateGroupHeader.js
-│       ├── AppPicker.js
-│       ├── AppointmentSection.js
-│       ├── MedicalHistoryView.js  # readOnly + externalData prop
-│       └── ConsultationMemo.js    # readOnly + ownerId prop
-└── assets/
-```
-
-### 4-4. 前景刷新同步（Pull Sync，實作中）
-
-**問題**：3-2、3-3 描述的 `cloudSync.js` 函式全部是「本機 → 雲端」單向 push。裝置 A 編輯資料成功推上雲端後，裝置 B（同帳號、App 保持開啟中）不會自動看到這筆更新，除非重新啟動 App 觸發一次 `initSync` hydration。
-
-**Layer 1 解法（前景刷新，分資料類型逐步推進中）**：
-- 監聽機制：`AppState.addEventListener('change', ...)`，用 ref 記錄前一個狀態，判斷是否為「從非 active 變成 active」的瞬間
-- 觸發條件：只在 Owner 模式執行（`!isViewerMode`）；Viewer 模式已有自己的 `useFocusEffect` 機制，不重複處理
-- 寫回本機：拉回的雲端資料需用專屬的 `*LocalOnly()` 函式寫入本機，不可用會順便推雲端的既有 save 函式，避免「拉下來又推上去」的空轉
-- 錯誤處理：查詢「當天雲端真的沒資料」與「查詢層級錯誤（RLS／連線問題）」必須分開處理（用 Supabase 的 `PGRST116` 錯誤碼判斷），否則查詢出錯會把本機正確資料靜默覆蓋成空的
-
-**推進順序**：
-1. `daily_med_checks`（每日用藥）— 邏輯已完成並修正兩輪問題，見 `docs/devlog.md` Build 31／32，本機驗證通過，等候 TestFlight
-2. `appointments`（行程）— 下一項
-3. 設定六個清單 — 需先確認能否複用既有 `refreshSettingsFromCloud` hydration 邏輯
-4. 其餘資料類型 — 比照辦理
-
-**Layer 2（未來）**：Supabase Realtime 訂閱，真正雙向即時同步，改動範圍較大，留待 Layer 1 全部資料類型上線後再評估。
+完整資料夾結構見 `docs/CLAUDE.md`「資料夾結構」（此處不重複列出，避免兩份文件互相漂移）。
 
 ---
 
@@ -328,117 +122,147 @@ HealthAppFresh/
 
 ### 5-1. 登入畫面（LoginScreen）
 - 顯示時機：`session === null`
-- 畫面中央：App 名稱「健康記錄」+ 歡迎文字
-- 按鈕：`AppleAuthentication.AppleAuthenticationButton`（buttonStyle: BLACK）
+- 畫面中央：App 名稱「健康記錄」「私人醫案手帳」副標 + 「以 Apple 帳號登入」提示
+- 按鈕：`AppleAuthentication.AppleAuthenticationButton`（buttonStyle: BLACK），登入中顯示 `ActivityIndicator`
+- 失敗時顯示錯誤文字（使用者主動取消登入，`ERR_REQUEST_CANCELED`，不顯示錯誤）
 - 風格：民國墨帳，深墨底色，標楷體
 
 ### 5-2. Tab 0 — 記錄症狀（RecordScreen）
 
 **擁有者模式：**
-- 症狀多選（從 `symptomList` 取值）；選「其他」顯示自由輸入欄
-- 嚴重程度 Slider 1–10，標示「輕微 / 中度 / 嚴重」
-- 開始時間自動帶入當前時間（`YYYY/MM/DD HH:MM`），可手動編輯
-- 自行服藥多選（從 `medList` 取值）
-- 送出按鈕「記錄」：未選症狀時 disabled
+- 症狀多選（`SymptomMultiPicker`，取值自 `symptomList`）；選「其他」時顯示自由輸入欄
+- 開始時間：依當下時間自動判斷「上午（9:00）／中午（12:00）／下午（15:00）」代表時刻，按「調整」可手動改日期與時段（沒有精確到分鐘的時間輸入）
+- 自行服藥多選（取值自 `medList`，`allowOther`）
+- 備註欄：多行 `TextInput`，focus 時上方出現「完成」按鈕收鍵盤
+- 送出按鈕「記錄」：未選症狀時 disabled；送出後清空表單重置為預設狀態
+- 送出的 log 沒有嚴重度輸入 UI，`severity` 固定為 `5`；`endTime`／`doctorDiagnosis`／`doctorMed`／`reliefSeverity`／`reliefNote` 皆為 `null`（這些欄位由 Tab 1 的補填功能事後填寫）
 
 **檢視者模式：**
-- 顯示「閱」字印章 + 「目前為查看模式，無法新增紀錄」提示
-- 引導文字：「請在上方切換回『查看自己』」
+- 顯示「閱」字印章 + 「目前為查看模式」+「無法在查看他人記錄時新增症狀紀錄」+「請在上方切換回『查看自己』」三行文字，不顯示任何表單欄位
 
 ### 5-3. Tab 1 — 歷史紀錄（HistoryScreen）
 
-子分頁：**症狀紀錄 / 病歷 / 分享**
+子分頁：**症狀紀錄 / 病　　歷**（只有 2 個，「分享」是「病歷」子分頁內的按鈕，不是獨立子分頁）
 
 **症狀紀錄：**
-- 頂部篩選下拉（全部症狀 + 已出現過的症狀）
-- 按日期分組（降冪），每組有日期 header
-- 每張 LogCard 分上下兩區：
-  - 上：嚴重度徽章、症狀名、時間區間、自行服藥、醫生診斷、醫生用藥、緩解狀況
-  - 下：補填按鈕 or 編輯按鈕 → 展開 inline 表單
-- 補填欄位：結束時間、醫生診斷、醫生確認用藥、緩解後嚴重度（0–10 Slider）、備註
+- 頂部篩選列：「篩選症狀」下拉（列出曾出現過的所有症狀）+ 「歷史」開關
+- 判定規則：有 `doctorDiagnosis` 或 `doctorMed` 任一有值即視為「已解決／歷史紀錄」，預設隱藏，
+  除非篩選了特定症狀或開啟「歷史」開關才會顯示
+- 按日期分組（降冪），每組有日期分隔線（`DateGroupHeader`）
+- 每張 `LogCard` 分上下兩區：
+  - 上：症狀名、起訖時間、自行服藥／醫生診斷／醫生用藥／緩解狀況（有值才顯示對應色塊）
+  - 下：「補填醫生診斷・確認用藥」或「編輯補充資料」按鈕 → 展開 inline 補填表單
+- 補填表單欄位：醫生診斷、醫生確認用藥（至少填一項才能儲存，除非展開了「修改原始症狀記錄」）；
+  展開「修改原始症狀記錄」後可另外改症狀、開始時間、自行服藥
+- **過敏藥物模糊比對警示**：儲存時若「醫生確認用藥」文字模糊匹配到 `allergyList` 裡任一項目
+  （逐字比對＋Levenshtein 編輯距離容錯：長度 3–8 容錯 1 個字元、9 以上容錯 2 個字元），跳出
+  「過敏藥物警示」Alert，需使用者選擇「確認儲存」才會真的存檔，選「返回編輯」則取消
+- 刪除記錄需二次確認（Alert）
 
 **病歷：**
-- 頂部：新增年份輸入框 + 新增按鈕
-- 按年份降冪分組，每年可新增 / 編輯 / 刪除個別記錄，也可刪除整年
-- 每筆記錄顯示：月份圖章 + 內容文字
-
-**分享：**
-- 按鈕：呼叫 `Share.share()`，將病歷格式化成純文字分享（iOS 系統分享選單）
+- 頂部：新增年份輸入框（限制 1900–2200）+ 新增按鈕
+- 按年份降冪分組，每年可展開/收合；可新增/編輯/刪除個別記錄（月份 + 內容文字），也可刪除整年（連帶刪除底下所有記錄，需二次確認）
+- 「分享」按鈕：把整份病歷格式化成純文字，呼叫 `Share.share()` 叫出系統分享選單
 
 **檢視者模式：**
 - 頂部橫幅：「● 目前查看：{name} 的紀錄」
-- 隱藏所有新增 / 編輯 / 刪除按鈕
-- LogCard `readOnly={true}`，MedicalHistoryView `readOnly={true}`
+- 隱藏所有新增/編輯/刪除按鈕，`LogCard` 與 `MedicalHistoryView` 皆 `readOnly`
+- 資料來源：`fetchOwnerLogs` / `fetchOwnerMedicalHistory`，進入此 Tab 時（`useFocusEffect`）重新拉一次
 
-### 5-4. Tab 2 — 每日用藥（DailyMedScreen）
+### 5-4. Tab 2 — 行事曆（CalendarScreen）
 
-子分頁：**月曆行程 / 所有行程 / 今日用藥**
+子分頁：**新增行程 / 所有行程**（舊規格描述的三分頁「月曆行程／所有行程／今日用藥」結構已不存在）
 
-**月曆行程：**
-- 月曆顯示，有行程的日期標記小點
-- 點日期進入日期詳情頁：顯示當日行程卡片 + 問診備忘
-- 日期詳情頁：返回按鈕 + 「今日」快捷按鈕
+- **預設開啟頁為「所有行程」**（2026/08 起；原預設「新增行程」，爸爸反映找不到既有行程列表）
+- 兩個分頁標籤文字皆為粗體（`fontWeight: '700'`），選中/未選中狀態都套用
 
-**所有行程：**
-- 依日期降冪列出所有行程
-- 頂部雙篩選器：類型（全部/門診/抽血/MRI/CT/X光/慢簽/復健/其他）+ 醫院（全部/國泰/台大/北醫/超越/其他）
-- 點行程進入詳情頁（同月曆點日期後的格式）
+**新增行程模式：**
+- 月曆（`CalendarView`）：有行程的日期標小點，點年月標題可開 Picker Modal 快速跳頁
+- 點日期進入詳情頁：返回按鈕 + 「今日」快捷按鈕 + 該日行程列表（`AppointmentSection`，
+  `timeOnly` 模式，表單只需選時間不需選日期）+ 問診備忘（`ConsultationMemo`）
 
-**今日用藥：**
-- 日期標題 + 進度條（已服 X / 總計 N）
-- 藥物清單：勾選框 + 藥名，勾選後加刪除線、按鈕變實心紅「服」字
-- 分母來源：owner 的完整 `medList`
+**所有行程模式：**
+- 依日期排列所有行程（未來優先，`showPast` 開關切到過去優先降冪）
+- 頂部類型／醫院雙篩選下拉 + 「歷史」開關（含過去日期）
+- 點行程卡片進入詳情頁（完整表單，含日期時間 + 醫院 + 類型 + 醫生 + 備註 + 問診備忘）
 
-**行程類型選項：** 門診 / 抽血 / MRI / CT / X光 / 慢簽 / 復健 / 其他
+**行程表單欄位：**
+- 日期時間：非 `timeOnly` 時先選日期（native date-only picker）再選時間；`timeOnly` 時只選
+  時間。兩種情況下的「時間」一律走自訂 24 小時制 Picker（`00~23 時` + `00,05,10,…,55 分`，
+  分鐘只能是 5 的倍數），不使用 native 的 12/24 小時制顯示（那個是跟裝置系統設定走，無法保證
+  一定顯示 24 小時制）
+- 醫院：下拉選單（`hospitalList`），選「其他」時出現自訂輸入框
+- 行程類型：下拉選單（`visitTypeList`），預設「門診」
+- 看診醫生：只有行程類型為「門診」時才顯示（`doctorList`），可留空
+- 備註：單行 `TextInput`
 
-**醫院選項：** 國泰醫院 / 台大醫院 / 北醫醫院 / 超越診所 / 其他（自訂輸入）
-
-**看診醫生選項：**
-- 蔡俊明
-- 蔡欣熹（神經內科）
-- 吳彥雯（心臟科）
-- 林志鵬（疼痛科）
-- 徐紹剛（復健科）
-
-**問診備忘：**
-- 綁定日期，一天一筆（`consultMemo_YYYY-MM-DD`）
-- 同一天多筆行程共用同一份備忘
-- 支援條列輸入（`+ 條目` 按鈕）
+**問診備忘（ConsultationMemo）：**
+- 綁定日期，一天一筆（`consultMemo_YYYY-MM-DD`），同一天多筆行程共用同一份備忘
+- 內容變更後 600ms debounce 自動存檔（不是即時逐字存檔）
+- Enter 換行時自動補上「• 」條列符號
+- **「清空」按鈕已移除**（2026/08，避免手滑誤刪整篇備忘），只保留「儲存」（自動存檔，無需手動按鈕）
+- **點文字內容才會 focus 跳出鍵盤**：`TextInput` 高度依內容自動調整（`onContentSizeChange`），
+  卡片裡文字以外的留白區域是純背景 View，點下去不會觸發 focus（2026/08 修正，原本整張卡片
+  都會觸發）
+- 新增一行用卡片下方「＋　新增一項」列（原本 header 的「＋ 條目」按鈕已移除，功能合併到這裡）
+- 有內容且未 focus 時顯示字數統計
 
 **檢視者模式：**
-- 隱藏「+ 新增」行程按鈕
-- 勾選框 disabled（不可勾選）
-- 問診備忘唯讀
-- 分母從 `fetchOwnerMedList(ownerId)` 讀取 owner 的藥物清單
+- 隱藏「+ 新增」行程按鈕，行程表單 `readOnly`，問診備忘唯讀
 
-### 5-5. Tab 3 — 設定（SettingsScreen）
+### 5-5. Tab 3 — 每日用藥（DailyMedScreen）
 
-**過敏藥物清單：**
-- 列表顯示，各項可編輯 / 刪除
-- 底部輸入框 + 新增按鈕
+> 舊規格把這個功能寫在「Tab 2 每日用藥」底下、與行事曆合併成一個 Tab；實際上這是獨立的
+> 第 4 個 Tab（第 5 個是設定），檔案是 `DailyMedScreen.js`，沒有月曆行程、所有行程這兩個
+> 子分頁——那兩個現在是 Tab 2 行事曆的內容。這個 Tab 只有單一畫面，沒有子分頁。
 
-**藥物清單（medList）：**
-- 同上結構
-- 變更後同步呼叫 `syncMedListToCloud`
+- 日期標題：固定顯示今日（這個畫面沒有切換日期的 UI）
+- 進度卡：已服 X / 總計 N，進度條（刻度 tick + 硃砂色填色），全部勾完顯示「今日用藥已全部確認」banner
+- 藥物清單：勾選框 + 藥名（`medList` 全部項目），勾選後文字加刪除線、狀態框變實心硃砂紅「服」字
+- 勾選「嗎啡貼布」會排程 36 小時後的換貼提醒推播；取消勾選則取消該筆排程
+- 「歷史」按鈕：開啟近 7 日用藥紀錄 Modal，可切換「依日期」／「依藥物」兩種檢視模式
 
-**症狀清單（symptomList）：**
-- 同上結構
-- 「其他」固定在末尾，不可刪除（顯示「固定項目」標籤）
+**檢視者模式：**
+- 唯讀，checkbox disabled，隱藏歷史以外的互動
+- 分母清單來源：`fetchOwnerMedList(ownerId)`（`profiles.med_list`），若為空則 fallback 成
+  `fetchOwnerAllMedKeys(ownerId)`（該 owner 所有歷史勾選記錄裡出現過的藥名聯集）
+
+### 5-6. Tab 4 — 設定（SettingsScreen）
+
+> 舊規格寫「三個 section」，實際是**六個**清單編輯區塊。
+
+**六個可編輯清單**（皆為：列表顯示 + 各項可編輯/刪除 + 底部輸入框與新增按鈕）：
+1. 藥物過敏清單（`allergyList`）
+2. 藥物清單（`medList`）
+3. 症狀清單（`symptomList`，「其他」固定在末尾，顯示「固定項目」樣式、不可刪除）
+4. 醫院清單（`hospitalList`，「其他」固定不可刪除）
+5. 行程類型清單（`visitTypeList`，「其他」可刪除）
+6. 看診醫生清單（`doctorList`）
+
+每個清單變更後各自呼叫 `syncListFieldToCloud(fieldName, list)`，只更新 Supabase `profiles`
+表對應的單一欄位，不會連帶覆蓋其他五個欄位。
 
 **家人分享：**
-- 產生邀請碼：6碼大寫英數（排除 0/O/1/I），有效期 48 小時
+- 產生邀請碼：6 碼大寫英數（排除 0/O/1/I），有效期 48 小時，`INSERT` 進 `invite_codes`
+  （欄位：`owner_id`／`code`／`expires_at`）
 - 成功後以硃砂大字顯示邀請碼 + 分享按鈕（`Share.share()`）
-- 可重新產生
-- 輸入邀請碼：輸入框（`autoCapitalize="characters"`）+ 綁定按鈕
-- 呼叫 `supabase.rpc('redeem_invite_code', { invite_code })`
+- 可重新產生（覆蓋顯示，不會撤銷舊碼）
+- 輸入邀請碼：輸入框（`autoCapitalize="characters"`，限 6 字）+ 綁定按鈕
+- 呼叫 `supabase.rpc('redeem_invite_code', { invite_code })`，失敗時 Alert 顯示錯誤訊息
+
+**`__DEV__` 專用除錯區塊**（正式版本不會出現，`!isViewerMode && __DEV__` 才渲染）：
+- 「同步設定到雲端」：逐欄呼叫 `syncListFieldToCloud`，Alert 顯示結果
+- 「清除 `localDataInitialized` flag」：目前清除的 AsyncStorage key 名稱與 `initSync.js`
+  實際使用中的 flag（`localDataInitialized_v4`）不一致，如實記錄現況
 
 **登出：**
 - 按鈕 + Alert 確認（「確定要登出嗎？」）
 - 呼叫 `supabase.auth.signOut()`
 
 **檢視者模式：**
-- 隱藏家人分享整個區塊
-- 所有清單唯讀（隱藏新增 / 編輯 / 刪除按鈕）
+- 隱藏家人分享整個區塊與 `__DEV__` 區塊
+- 六個清單皆唯讀，資料來源是 `fetchOwnerSettings(activeOwner.id)` 直接讀雲端（不經過
+  `SettingsContext`，也就是不經過本機快取，每次切換 owner 都重新拉一次）
 
 ---
 
@@ -446,12 +270,13 @@ HealthAppFresh/
 
 ### 6-1. 邀請碼流程
 1. Owner 在設定頁面點「產生邀請碼」
-2. 系統產生 6 碼大寫英數字串，INSERT 進 `invite_codes` 表，有效期 48 小時
+2. 系統產生 6 碼大寫英數字串，`INSERT` 進 `invite_codes` 表，有效期 48 小時
 3. Owner 透過系統分享選單把邀請碼傳給家人
 4. 家人打開 App，登入後進設定，輸入邀請碼按「綁定」
 5. App 呼叫 `supabase.rpc('redeem_invite_code', { invite_code })`
-6. 資料庫函式驗證（存在、未過期、未使用、非自己邀自己），寫入 `viewer_access`
-7. 成功後 Alert「已成功綁定」
+6. 資料庫函式驗證（存在、未過期、未使用、非自己邀自己——驗證邏輯在 RPC 內部，client 端
+   程式碼看不到，無法從前端核實細節），寫入 `viewer_access`
+7. 成功後 Alert 顯示結果
 
 ### 6-2. 身份切換（IdentitySwitcher）
 - 顯示條件：`viewableOwners.length > 0`
@@ -461,21 +286,13 @@ HealthAppFresh/
 
 ### 6-3. 檢視者資料來源（viewerData.js）
 
-| 函式 | 來源表 | 回傳格式 |
-|------|--------|---------|
-| `fetchOwnerLogs(ownerId)` | symptom_logs | camelCase，symptom 字串 split 成 symptoms[] |
-| `fetchOwnerMedicalHistory(ownerId)` | medical_history | 巢狀年份結構 `[{year, records:[{id,month,text}]}]` |
-| `fetchOwnerAppointments(ownerId)` | appointments | camelCase，appt_time → dateTime |
-| `fetchOwnerDailyMed(ownerId, date)` | daily_med_checks | `{date, checked}` |
-| `fetchOwnerMarkedDates(ownerId)` | appointments | 有行程日期的集合（月曆標記用）|
-| `fetchOwnerMedList(ownerId)` | profiles.med_list | string[] |
-| `fetchOwnerConsultMemo(ownerId, date)` | consult_memos | string |
+完整函式清單見 `docs/CLAUDE.md`「雲端同步邏輯」→「`viewerData.js` 函式清單」，此處不重複。
 
 ### 6-4. RLS 規則摘要
 - 所有表 RLS 開啟
 - Owner：對自己資料全權限（SELECT / INSERT / UPDATE / DELETE）
 - Viewer：只能 SELECT，條件是 `viewer_access` 表中有對應的 `accepted` 授權
-- `redeem_invite_code` 函式為 `SECURITY DEFINER`，繞過 RLS 寫入 viewer_access
+- `redeem_invite_code` 函式為 `SECURITY DEFINER`，繞過 RLS 寫入 `viewer_access`
 
 ---
 
@@ -499,95 +316,70 @@ HealthAppFresh/
 | `colors.header` / `colors.headerDeep` / `colors.headerMid` | 深墨色漸層（Header、Tab Bar）|
 | `colors.cinnabar` | 硃砂紅（CTA 按鈕、印記、active 狀態）|
 | `colors.gold` / `colors.goldLight` / `colors.goldFaint` | 舊金（裝飾線、邊框、inactive Tab）|
-| 嚴重度 1–3 | 青瓷色 |
-| 嚴重度 4–6 | 琥珀色 |
-| 嚴重度 7–10 | 緋色 |
+| `TYPE_COLORS`（行程類型）| 門診＝硃砂／抽血＝靛／MRI＝苔綠／CT＝褐／骨掃描＝灰藍／X光＝舊金／慢簽＝橄欖／復健・其他＝muted |
+
+> 舊規格提到的「嚴重度 1–3 青瓷 / 4–6 琥珀 / 7–10 緋色」分級用色，目前程式碼裡沒有對應的
+> UI 在使用（`severity` 沒有輸入介面，見上方第 3 節），`colors.js` 裡確實有
+> `textSelfMed`／`textDiagnosis`／`textDoctorMed`／`textRelief` 這組語意色，但用途是
+> `LogCard.js` 裡不同欄位類型的標籤色，不是嚴重度分級。
 
 ### 7-4. Tab 圖示
-單字楷書漢字置於小方框（印章樣式）：
+單字楷書漢字置於小方框（印章樣式），共 5 個：
 - Tab 0：記
 - Tab 1：史
-- Tab 2：藥
-- Tab 3：調
+- Tab 2：曆
+- Tab 3：藥
+- Tab 4：設
 
 ---
 
 ## 8. 開發流程
 
-### 8-1. 日常開發（純 JS 改動）
+完整打包/簽章步驟、EAS 額度、TestFlight 測試人員清單見 `docs/CLAUDE.md`「更新與打包流程」，
+此處不重複列出以避免兩份文件漂移。重點提醒：
 
-```bash
-# Terminal：啟動 Metro
-cd ~/Downloads/Projects/HealthAppFresh
-npx expo start --dev-client
-
-# 手機打開 Development Build（恐龍圖示），掃 QR code
-# 程式碼改動熱更新，不需 build
-```
-
-### 8-2. 正式版本送出流程（本機打包 + 手動簽章，唯一流程）
-
-> **⚠️ 2026/07/11 起變更**：正式版本一律**停用 `eas build`**。Build 24 透過 `eas build --profile production` 送出後，爸爸 iPad／媽媽 iPhone 全白屏，排查後確認是 `eas build` 雲端建置流程產生的 JS bundle 跟本機建置版本位元組不同，根本原因未知（見 `docs/devlog.md` C-009、C-010）。往後正式版本一律走本機打包 + 手動簽章流程，詳細步驟見 `docs/CLAUDE.md`「更新與打包流程」。`eas submit` 本身沒有問題，維持使用。
-
-流程摘要（完整指令見 `docs/CLAUDE.md`）：
-1. `npx expo export:embed` 本機打包 JS（不經 EAS 雲端）
-2. 本機 `hermesc` 編譯成 Hermes bytecode
-3. 置換進乾淨、已知能動的 Build 27 殼子（原生層已驗證沒問題）
-4. 補 provisioning profile、改高版本號
-5. 清除舊簽章與 macOS 隱藏中繼資料、重新 `codesign`
-6. `codesign --verify --deep --strict` 驗證
-7. 打包 ipa，`eas submit --platform ios --path <ipa>` 送出
-
-Development Build（`eas build --profile development`）不受影響，日常開發測試照常使用。
-
-### 8-3. EAS Build 額度管理
-- 免費方案：每月 15 次 iOS build
-- 查詢用量：https://expo.dev/accounts/sophiechenggg/billing
-- **節省原則**：UI 改動先在 Development Build 確認定案，再統一 build
-
-### 8-4. Development Build vs TestFlight
-
-| | Development Build | TestFlight |
-|--|--|--|
-| 圖示 | 恐龍（粉紅色）| 正常 App 圖示 |
-| 安裝方式 | `eas build --profile development` 後掃 QR 安裝 | 透過 TestFlight App，正式版本以本機打包 + 手動簽章送出（見 8-2）|
-| 熱更新 | ✅（Metro 連線時）| ❌（需重新走本機打包 + 簽章流程送出）|
-| Apple Sign In | ✅ | ✅ |
-| 用途 | 開發測試 | 給用戶使用 |
-
-### 8-5. TestFlight 測試人員
-| 姓名 | Apple ID | 狀態 |
-|------|---------|------|
-| ChengJui Hsi（爸爸）| rayjhcheng@gmail.com | 已安裝，Build 24 白屏事故受影響裝置（iPad）之一 |
-| 程歆雅（開發者）| sophiecheng0716@gmail.com | 已安裝 |
-| 程偉綸（弟弟）| williammantou@gmail.com | 已邀請 |
-| ChenElysia（媽媽）| elysiachentp@gmail.com | 已在使用中，Build 24 白屏事故受影響裝置（iPhone）之一 |
-
-> 新增內部測試人員：先在 Apple Developer 後台加為成員 → 再到 App Store Connect → TestFlight → 測試人員加入
+- 正式版本一律**本機打包 + 手動簽章**，`eas build --profile production` 停用
+- Development Build（`eas build --profile development`）不受影響，日常開發照常使用
+- 任何程式碼改動都必須實際走過一次本機打包流程、裝到實機測試過，才算數驗證——`git diff`
+  只能檢查邏輯合不合理，不能證明建置出來的東西會不會動（見 `docs/devlog.md` C-009、C-010）
 
 ---
 
-## 9. 已知問題與注意事項
+## 9. 已知現況與限制（如實記錄，不代表判斷是否需要修復）
 
 ### 9-1. 爸爸的雙帳號歷史
 爸爸在 Supabase 有兩個 UUID：
 - `d6dce0d7...`：開發測試期間用 Xinya 的 Apple ID 登入產生，**已廢棄**
 - `423e495b...`：爸爸真實 Apple ID 登入後產生，**這是正確帳號**
 
-所有資料已於 2026/07/01 用 SQL UPDATE 搬移到 `423e495b...`。
-未來不要再用 `d6dce0d7...`。
+所有資料已於 2026/07/01 用 SQL UPDATE 搬移到 `423e495b...`。未來不要再用 `d6dce0d7...`。
 
-### 9-2. SafeAreaView 警告
-Metro log 常見 `SafeAreaView has been deprecated` 警告，這是 Expo SDK 54 底層的已知問題，不影響功能，暫時忽略。
+### 9-2. 嚴重度（severity / reliefSeverity）沒有輸入 UI
+資料模型裡保留這兩個欄位，`RecordScreen.js` 送出時 `severity` 固定寫死 `5`，
+`reliefSeverity` 全專案搜尋不到任何寫入路徑，畫面上只有顯示邏輯（`log.reliefSeverity !==
+null` 才渲染），沒有編輯邏輯。已安裝的 `@react-native-community/slider` 套件目前沒有被
+任何檔案 import。
 
-### 9-3. 補遷移機制
-每次登入（`SIGNED_IN` 事件）會觸發 `runSupplementalMigrations()`，透過四個獨立 flag 確保各類資料只搬遷一次，不重複上傳。
+### 9-3. 雲端寫入沒有失敗重試機制
+`cloudSync.js` 的所有 push / delete 函式都是 fire-and-forget，失敗只 `console.warn`。
+目前程式碼庫裡搜尋不到任何重試佇列（`syncQueue.js`、`enqueuePendingSync` 等）。離線編輯後
+恢復網路，除非使用者剛好再次觸發同一筆資料的寫入操作，否則不會自動補推上雲端。
 
-### 9-4. eas submit 可能卡住
+### 9-4. 前景刷新拉取同步尚未覆蓋全部資料類型
+見上方第 3 節「前景刷新拉取同步（Pull Sync）現況」，`symptom_logs`（症狀紀錄）與
+`medical_history`（病歷）目前仍只在登入／App 重新啟動時的一次性 hydration 才會拉最新版，
+App 開著期間裝置之間互相看不到彼此的更新。
+
+### 9-5. SafeAreaView 警告
+Metro log 常見 `SafeAreaView has been deprecated` 警告，這是 Expo SDK 54 底層的已知問題，不影響功能。
+
+### 9-6. eas submit 可能卡住
 EAS Submit 有時會在 `waiting for an available submitter` 卡住超過 15 分鐘，這是 EAS 雲端佇列問題，不是程式碼問題。改用 Transporter 可完全繞過此問題。
 
-### 9-5. eas build 雲端建置在正式版本上不可靠（2026/07/11 起停用）
-Build 24 透過正常 `eas build --profile production` 送出後，爸爸 iPad、媽媽 iPhone 全白屏，開發者自己的 dev client 從未重現。排查後確認：問題不在 Build 24 新增的功能本身（完整退回原始碼、重新透過 `eas build` 建置測試依然白屏），而是 `eas build` 產生的 JS bundle 跟真正能動的版本位元組層級不同，**根本原因未知**。往後正式版本一律改用本機打包 + 手動簽章流程（見 8-2、`docs/CLAUDE.md`），`eas build --profile development` 不受影響、日常開發照常使用。完整排查過程見 `docs/devlog.md` C-009。
+### 9-7. eas build 雲端建置在正式版本上不可靠（2026/07/11 起停用）
+完整排查過程見 `docs/devlog.md` C-009、C-010，摘要見 `docs/CLAUDE.md`「更新與打包流程」。
 
-### 9-6. git 上的原始碼不等於已驗證的運作版本
-即使原始碼邏輯完全等於某個已知正常的版本，透過 `eas build` 重新建置出來的東西依然可能白屏（見 9-5）。這代表 `git diff` 只能檢查邏輯是否合理，不能證明這份原始碼建置出來會不會動——任何改動都必須實際走一次本機打包流程、裝到實機測試過，才算數驗證。詳見 `docs/devlog.md` C-010。
+### 9-8. `invite_codes` 的 `used_by` / `used_at` 欄位無法從 client 端核實
+`SettingsScreen.js` 產生邀請碼時只 `insert` 了 `owner_id`／`code`／`expires_at` 三欄，核銷相關
+欄位（若存在）是在 `redeem_invite_code` RPC 函式內部設定，這份規格書沒有管道查看該函式的
+SQL 定義。

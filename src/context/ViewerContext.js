@@ -37,13 +37,21 @@ export function ViewerProvider({ children }) {
       setOwnerSettings(EMPTY_SETTINGS);
       return;
     }
-    fetchOwnerSettings(activeOwner.id).then(setOwnerSettings);
+    fetchOwnerSettings(activeOwner.id)
+      .then(setOwnerSettings)
+      .catch((e) => {
+        console.warn('[ViewerContext] 讀取檢視者設定失敗，保留原有畫面狀態:', e.message);
+      });
   }, [activeOwner?.id]);
 
   const refreshOwnerSettings = useCallback(async () => {
     if (!activeOwner) return;
-    const settings = await fetchOwnerSettings(activeOwner.id);
-    setOwnerSettings(settings);
+    try {
+      const settings = await fetchOwnerSettings(activeOwner.id);
+      setOwnerSettings(settings);
+    } catch (e) {
+      console.warn('[ViewerContext] refreshOwnerSettings 失敗，保留原有畫面狀態:', e.message);
+    }
   }, [activeOwner?.id]);
 
   async function loadViewableOwners(userId) {

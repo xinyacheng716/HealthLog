@@ -10,8 +10,8 @@ import { colors } from '../constants/colors';
 const KAITI = Platform.OS === 'ios' ? 'STKaiti' : 'serif';
 const FONT = { fontFamily: KAITI };
 
-// Minutes allowed in appointment time picker: union of ×10 and ×15
-const MINUTE_OPTIONS = [0, 10, 15, 20, 30, 40, 45, 50];
+// Minutes allowed in appointment time picker: multiples of 5 only
+const MINUTE_OPTIONS = Array.from({ length: 12 }, (_, i) => i * 5);
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, i) => i);
 
 function snapMinute(m) {
@@ -45,12 +45,16 @@ export default function DateTimeField({
   placeholder,
   timeOnly = false,
 }) {
-  // ── Full datetime picker state (non-timeOnly) ──────────────────────────
+  // ── Date-only native picker state (non-timeOnly, step 1 of 2) ───────────
+  // 時間一律交給下面的自訂 24 小時制 Picker（見 showCustom）處理，不用
+  // native 的 time/datetime 模式——native 的 12/24 小時制顯示是跟著裝置
+  // 系統設定走的（不是單看 locale prop 就能保證），沒辦法保證使用者一定
+  // 看到 24 小時制。日期本身沒有上午／下午的問題，所以日期還是交給 native
+  // date-only 模式挑，只有「時間」這一步固定走自訂 Picker。
   const [showNative, setShowNative] = useState(false);
-  const [androidStep, setAndroidStep] = useState('date');
   const [tempDate, setTempDate] = useState(null);
 
-  // ── Custom time picker state (timeOnly) ────────────────────────────────
+  // ── Custom 24-hour time picker state (timeOnly, and non-timeOnly step 2) ─
   const [showCustom, setShowCustom] = useState(false);
   const [pickerHour, setPickerHour] = useState(0);
   const [pickerMinute, setPickerMinute] = useState(0);
@@ -61,52 +65,56 @@ export default function DateTimeField({
 
   // ── Handlers ──────────────────────────────────────────────────────────
 
+  function openTimeStep(baseDate) {
+    setPickerHour(baseDate.getHours());
+    setPickerMinute(snapMinute(baseDate.getMinutes()));
+    setShowCustom(true);
+  }
+
   function handlePress() {
     if (timeOnly) {
-      const d = value ? parseDate(value) : new Date();
-      setPickerHour(d.getHours());
-      setPickerMinute(snapMinute(d.getMinutes()));
-      setShowCustom(true);
+      openTimeStep(value ? parseDate(value) : new Date());
     } else {
-      setAndroidStep('date');
       setTempDate(null);
       setShowNative(true);
     }
   }
 
   function confirmCustom() {
-    const base = value ? parseDate(value) : new Date();
+    const base = timeOnly
+      ? (value ? parseDate(value) : new Date())
+      : (tempDate || pickerDate);
     const combined = new Date(
       base.getFullYear(), base.getMonth(), base.getDate(),
       pickerHour, pickerMinute,
     );
     onChange(formatDate(combined));
     setShowCustom(false);
+    setTempDate(null);
   }
 
-  function handleIOSChange(_, selectedDate) {
+  // iOS 日期 spinner 邊滾邊觸發 onChange，先暫存，等使用者按「完成」才進
+  // 下一步（時間），跟 timeOnly 模式一次到位的邏輯不同。
+  function handleIOSDateChange(_, selectedDate) {
     if (!selectedDate) return;
-    onChange(formatDate(selectedDate));
+    setTempDate(selectedDate);
   }
 
-  function handleAndroidChange(event, selectedDate) {
+  function handleIOSDateDone() {
+    const base = tempDate || pickerDate;
+    setShowNative(false);
+    openTimeStep(base);
+  }
+
+  function handleAndroidDateChange(event, selectedDate) {
     if (event.type === 'dismissed') {
-      setShowNative(false); setAndroidStep('date'); setTempDate(null);
+      setShowNative(false);
       return;
     }
     const picked = selectedDate || pickerDate;
-    if (androidStep === 'date') {
-      setTempDate(picked);
-      setAndroidStep('time');
-    } else {
-      const base = tempDate || pickerDate;
-      const combined = new Date(
-        base.getFullYear(), base.getMonth(), base.getDate(),
-        picked.getHours(), picked.getMinutes(),
-      );
-      onChange(formatDate(combined));
-      setShowNative(false); setAndroidStep('date'); setTempDate(null);
-    }
+    setShowNative(false);
+    setTempDate(picked);
+    openTimeStep(picked);
   }
 
   // ── Render ─────────────────────────────────────────────────────────────
@@ -185,7 +193,7 @@ export default function DateTimeField({
 
               <View style={styles.pickerDivider} />
 
-              {/* Minute — only ×10 and ×15 values */}
+              {/* Minute — multiples of 5 only */}
               <View style={styles.pickerCol}>
                 {Platform.OS === 'android' ? (
                   <View style={styles.androidPickerWrap}>
@@ -217,17 +225,17 @@ export default function DateTimeField({
         </View>
       </Modal>
 
-      {/* ── iOS inline spinner (non-timeOnly only) ── */}
+      {/* ── iOS inline date-only spinner (non-timeOnly, step 1 of 2) ── */}
       {showNative && Platform.OS === 'ios' && (
         <View style={styles.iosPickerWrap}>
-          <TouchableOpacity style={styles.iosDoneRow} onPress={() => setShowNative(false)}>
+          <TouchableOpacity style={styles.iosDoneRow} onPress={handleIOSDateDone}>
             <Text style={[styles.iosDoneText, FONT]}>完　成</Text>
           </TouchableOpacity>
           <DateTimePicker
-            value={pickerDate}
-            mode="datetime"
+            value={tempDate || pickerDate}
+            mode="date"
             display="spinner"
-            onChange={handleIOSChange}
+            onChange={handleIOSDateChange}
             locale="zh-TW"
             textColor={colors.textPrimary}
             style={styles.iosDTPicker}
@@ -235,13 +243,13 @@ export default function DateTimeField({
         </View>
       )}
 
-      {/* ── Android dialog (non-timeOnly only) ── */}
+      {/* ── Android date-only dialog (non-timeOnly, step 1 of 2) ── */}
       {showNative && Platform.OS === 'android' && (
         <DateTimePicker
           value={tempDate || pickerDate}
-          mode={androidStep}
+          mode="date"
           display="default"
-          onChange={handleAndroidChange}
+          onChange={handleAndroidDateChange}
         />
       )}
     </View>
