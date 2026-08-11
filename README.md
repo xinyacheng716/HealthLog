@@ -2,9 +2,28 @@
 
 A caregiving app that helps cancer patients organize symptoms, appointments, and medications, so every doctor visit starts with clear answers instead of guesswork.
 
+## 功能演示
+
+<video width="100%" controls>
+  <source src="https://github.com/xinyacheng716/HealthFreshApp/releases/download/v1.0-demo/HealthApp_video.mp4" type="video/mp4">
+  Your browser does not support the video tag.
+</video>
+
 ## Why this exists
 
 This app is inspired by my dad, a stage-four lung cancer patient who struggled to organize his symptoms and communicate them clearly to his doctors. Patients like him often deal with multiple, overlapping issues and have to see several specialists, sometimes across different departments or even different hospitals. He lacked a proper tool to record what he was experiencing in a way he could actually bring back to each doctor.
+
+## A few design choices worth mentioning
+
+**Why every dropdown is user-editable instead of a fixed list.** Cancer patients are vulnerable to a wide range of side effects, and they rarely know in advance what they'll need to track next or which specialist they'll end up seeing for it. A fixed list would fall out of date the moment a new symptom or medication appeared, so every dropdown in this app is built to be extended by the user as their situation changes.
+
+<div align="center">
+<img src="docs/assets/settings.gif" width="300">
+</div>
+
+**Why symptom entries ask what the patient took to relieve it.** This is a question doctors ask routinely, and if it isn't a structured field, patients are likely to forget the detail by the time they're in the appointment. Capturing it at the moment of the symptom, rather than relying on memory later, also gives doctors a more accurate basis for diagnosis.
+
+**Why viewer mode is read-only instead of shared editing.** The app is designed around the patient being capable of recording their own information. The problem was never that they couldn't record it, but that no existing tool organized it well enough. Read-only viewing lets family members stay informed without the ambiguity of multiple people editing the same record. For situations where the patient genuinely needs help entering data, the app doesn't try to build a shared-editing model on top of that assumption. A family member can just log in directly with the patient's account and edit on their behalf, which is simpler and avoids attribution confusion.
 
 ## Who it's for
 
@@ -38,17 +57,6 @@ Every saved entry flows into History, where the patient can add what the doctor 
 <img src="docs/assets/daily_meds.gif" width="300">
 </div>
 
-Past intake can also be reviewed two ways: by date, looking back up to 7 days, or by medication, to quickly check whether a specific drug was taken at all within the last 7 days.
-
-<div align="center">
-<img src="docs/assets/meds_history.gif" width="300">
-</div>
-
-**Settings.** Every dropdown in the app (symptoms, medications, hospitals, appointment types, doctor names, drug allergies) is managed from one place and fully editable by the user.
-
-<div align="center">
-<img src="docs/assets/settings.gif" width="300">
-</div>
 
 **Viewer mode.** Family members view the patient's records read-only with an invite code, so anyone taking a turn at care can get up to speed in seconds.
 
@@ -56,13 +64,6 @@ Past intake can also be reviewed two ways: by date, looking back up to 7 days, o
 <img src="docs/assets/viewer_mode.gif" width="300">
 </div>
 
-## A few design choices worth mentioning
-
-**Why every dropdown is user-editable instead of a fixed list.** Cancer patients are vulnerable to a wide range of side effects, and they rarely know in advance what they'll need to track next or which specialist they'll end up seeing for it. A fixed list would fall out of date the moment a new symptom or medication appeared, so every dropdown in this app is built to be extended by the user as their situation changes.
-
-**Why symptom entries ask what the patient took to relieve it.** This is a question doctors ask routinely, and if it isn't a structured field, patients are likely to forget the detail by the time they're in the appointment. Capturing it at the moment of the symptom, rather than relying on memory later, also gives doctors a more accurate basis for diagnosis.
-
-**Why viewer mode is read-only instead of shared editing.** The app is designed around the patient being capable of recording their own information. The problem was never that they couldn't record it, but that no existing tool organized it well enough. Read-only viewing lets family members stay informed without the ambiguity of multiple people editing the same record. For situations where the patient genuinely needs help entering data, the app doesn't try to build a shared-editing model on top of that assumption. A family member can just log in directly with the patient's account and edit on their behalf, which is simpler and avoids attribution confusion.
 
 ## What's next
 
