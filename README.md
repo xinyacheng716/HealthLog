@@ -7,7 +7,9 @@ A caregiving app that helps cancer patients organize symptoms, appointments, and
 
 <div align="center">
 
-https://github.com/user-attachments/assets/62306b6f-3fb7-4542-98fb-bd48c9444899
+
+https://github.com/user-attachments/assets/71dffae8-0c42-4509-8650-e8b369222fab
+
 
 </div>
 
