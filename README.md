@@ -4,12 +4,11 @@
 
 A caregiving app that helps cancer patients organize symptoms, appointments, and medications, so every doctor visit starts with clear answers instead of guesswork.
 
-## 功能演示
 
-<video width="100%" controls>
-  <source src="https://github.com/xinyacheng716/HealthFreshApp/releases/download/v1.0-demo/HealthApp_video.mp4" type="video/mp4">
-  Your browser does not support the video tag.
-</video>
+
+https://github.com/user-attachments/assets/62306b6f-3fb7-4542-98fb-bd48c9444899
+
+
 
 ## Why this exists
 
