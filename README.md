@@ -5,8 +5,12 @@
 A caregiving app that helps cancer patients organize symptoms, appointments, and medications, so every doctor visit starts with clear answers instead of guesswork.
 
 
+<div align="center">
 
 https://github.com/user-attachments/assets/62306b6f-3fb7-4542-98fb-bd48c9444899
+
+</div>
+
 
 
 
