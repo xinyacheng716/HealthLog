@@ -1,6 +1,6 @@
 
 
-# HealthAppFresh
+# Health_Log
 
 A caregiving app that helps cancer patients organize symptoms, appointments, and medications, so every doctor visit starts with clear answers instead of guesswork.
 
